@@ -13,6 +13,7 @@ class TeacherCourseCallback(CallbackData, prefix="teacher"):
         "publish",
         "review_list",
         "attempts",
+        "unassigned",
         "open",
         "approve",
         "return",

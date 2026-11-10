@@ -12,6 +12,7 @@ from labdefender.app import create_dispatcher
 from labdefender.db.models import DefenseSlot, Membership, QueueEntry, Submission
 from labdefender.db.session import create_database, initialize_database
 from labdefender.enums import AssignmentFormat, Role, SubmissionStatus
+from labdefender.keyboards.coursework import TeacherCourseCallback
 from labdefender.keyboards.defense import (
     StudentQueueCallback,
     StudentQueueDraftCallback,
@@ -565,6 +566,22 @@ async def press(dispatcher, bot, callback, *, user=101):
         bot,
         callback_update(callback.pack() if hasattr(callback, "pack") else callback, user_id=user),
     )
+
+
+async def test_teacher_opens_and_refreshes_unassigned(context, bot):
+    sessions, _, _, assignment, _ = context
+    dispatcher = create_dispatcher(sessions)
+    await press(dispatcher, bot, TeacherCourseCallback(action="attempts", object_id=assignment.id))
+    buttons = messages(bot)[-1].reply_markup.inline_keyboard
+    entry = next(b for row in buttons for b in row if b.text == "Допущены, но не записались")
+    await press(dispatcher, bot, entry.callback_data)
+    assert "User202" in messages(bot)[-1].text
+    refresh = first_button(bot)
+    slot = await day(context, capacity=3)
+    for student in (202, 203, 204):
+        await book(context, slot, student=student)
+    await press(dispatcher, bot, refresh)
+    assert "Нет допущенных студентов без записи." in messages(bot)[-1].text
 
 
 async def prepare_booking(dispatcher, bot, slot, *, user=202):
