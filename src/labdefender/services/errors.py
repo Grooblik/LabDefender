@@ -15,6 +15,35 @@ class ObjectUnavailable(DomainError):
         super().__init__("Объект не найден или недоступен.")
 
 
+class InvalidGroupName(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Название группы должно содержать от 1 до 128 символов. Введите его заново."
+        )
+
+
+class InvalidInvitation(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Приглашение недействительно. Запись в группу не выполнена. Обратитесь к преподавателю."
+        )
+
+
+class GroupCreationUnavailable(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Не удалось создать группу. Попробуйте ещё раз через /create_group.")
+
+
+class StaleGroupAction(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Кнопка устарела. Начните создание заново через /create_group.")
+
+
+class InvitationUnavailable(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Не удалось получить ссылку. Попробуйте ещё раз через /invite.")
+
+
 class UserNotRegistered(DomainError):
     def __init__(self) -> None:
         super().__init__("Пользователь не зарегистрирован. Попросите его сначала выполнить /start.")

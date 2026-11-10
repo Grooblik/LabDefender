@@ -170,7 +170,7 @@ async def test_common_commands_clear_dialogue(database, bot, command):
     assert await dispatcher.storage.get_data(key) == {}
 
 
-async def test_unimplemented_invite_is_not_reported_as_joined(database, bot):
+async def test_invalid_invite_is_not_reported_as_joined(database, bot):
     _, sessions = database
     dispatcher = create_dispatcher(sessions)
     await dispatcher.feed_update(bot, message_update("/start join_test"))

@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, SendMessage
-from aiogram.types import Chat, Message
+from aiogram.methods import AnswerCallbackQuery, DeleteMessage, GetMe, SendMessage
+from aiogram.types import Chat, Message, User
 
 from labdefender.db.session import create_database, initialize_database
 
@@ -33,6 +33,10 @@ class RecordingSession(BaseSession):
             )
         if isinstance(method, (AnswerCallbackQuery, DeleteMessage)):
             return True
+        if isinstance(method, GetMe):
+            return User(
+                id=bot.id, is_bot=True, first_name="LabDefender", username="LabDefenderTestBot"
+            )
         raise AssertionError(f"Unexpected Telegram method: {type(method).__name__}")
 
     async def stream_content(self, *args, **kwargs) -> AsyncGenerator[bytes, None]:
