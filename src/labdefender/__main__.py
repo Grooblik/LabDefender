@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from pydantic import ValidationError
+from pydantic_settings import SettingsError
 
 from labdefender.app import run
 from labdefender.config import Settings
@@ -10,9 +11,12 @@ from labdefender.config import Settings
 def main() -> None:
     try:
         settings = Settings()
-    except ValidationError:
+    except (ValidationError, SettingsError):
         # ValidationError can contain the input (including the token).
-        raise SystemExit("Проверьте BOT_TOKEN, DATABASE_URL и LOG_LEVEL в .env.") from None
+        raise SystemExit(
+            "Проверьте BOT_TOKEN, DATABASE_URL, LOG_LEVEL, "
+            "TEACHER_REGISTRATION_CODE и ADMIN_IDS в .env."
+        ) from None
 
     logging.basicConfig(
         level=settings.log_level,

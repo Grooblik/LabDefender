@@ -2,8 +2,10 @@
 
 ## Что уже доступно
 
-- `labdefender.app.create_dispatcher(session_factory)` подключает общий роутер,
-  затем студента, преподавателя и последним fallback.
+- `labdefender.app.create_dispatcher(session_factory, settings=settings)` подключает
+  общий роутер с регистрацией, затем студента, преподавателя и последним fallback.
+  Без `settings` фабрика тоже работает, но регистрация по коду и админ-доступ
+  отключены — это удобно для изолированных тестов.
 - Обработчики работают в личном чате. Групповые сообщения и inline-mode callbacks
   не входят в MVP.
 - Аргументы обработчика `session: AsyncSession` и `current_user: User` заполняются
@@ -11,8 +13,11 @@
 - `current_user.id` — внутренний PK. `current_user.telegram_id` — ID Telegram;
   внешние ключи моделей ссылаются именно на внутренний PK.
 - `RoleFilter` подключён к `message` и `callback_query` каждого ролевого роутера.
-- Новая Telegram-учётка автоматически сохраняется как `student`; регистрация
-  преподавателя появится на этапе 2. Смена имени не сбрасывает существующую роль.
+- Новая Telegram-учётка автоматически сохраняется как `student`; кнопка
+  «Я преподаватель» и `/teacher` начинают проверку кода. Смена имени не сбрасывает роль.
+- `TEACHER_REGISTRATION_CODE` задаётся в `.env`, `ADMIN_IDS` — JSON-массив Telegram ID.
+  Админ-команда `/grant_teacher <telegram_id>` назначает роль зарегистрированному
+  пользователю; админ-права не зависят от учебной роли.
 - Роли: `Role.STUDENT`, `Role.TEACHER`. Статусы: `PENDING`, `RETURNED`, `APPROVED`.
   В БД сохраняются строковые значения в нижнем регистре из общих enum-ов.
 
@@ -61,6 +66,9 @@ def create_router() -> Router:
 перехватит команды следующих роутеров. `/start`, `/help`, `/cancel` остаются общими.
 Для callback используем префиксы `student:` / `teacher:` и `CallbackData`.
 На обработанную callback-кнопку всегда отвечаем через `callback.answer()`.
+Префикс `auth:` и `TeacherRegistration` заняты общим диалогом регистрации.
+Код никогда не записываем в FSM и не включаем в сообщения или логи. Команды
+`/teacher` и `/grant_teacher` также принадлежат ядру.
 
 ## Транзакции и права
 
@@ -79,7 +87,43 @@ SQLAlchemy само начинает транзакцию: не вызываем
 группы/попытки, участие в группе и принадлежность дня заданию. Существование ID
 в callback, FSM или БД само по себе прав не даёт.
 
-## Общая схема первого этапа
+Готовые проверки из `services/access.py`:
+
+- `require_user(session, actor_id=..., role=...)` — пользователь и необязательная роль.
+- `require_group_owner(session, actor_id=..., group_id=...)` — преподаватель-владелец.
+- `require_group_member(session, actor_id=..., group_id=...)` — студент-участник.
+- `require_assignment_access(session, actor_id=..., assignment_id=...)` — доступ
+  владельца группы или её студента к заданию.
+- `require_submission_access(session, actor_id=..., submission_id=...)` — преподаватель
+  своей группы или автор решения, который всё ещё состоит в группе.
+- `require_defense_day_access(session, actor_id=..., defense_day_id=...)` — доступ
+  к дню через его задание. Допуск к записи и вместимость эта проверка не проверяет.
+
+Функции возвращают разрешённую ORM-модель или выбрасывают безопасную `DomainError`.
+Они не делают commit. Отсутствующий и чужой объект получают одинаковый ответ.
+Middleware показывает доменные ошибки по-русски; для callback — через alert.
+Не отправляйте файл/содержимое попытки до успешного вызова проверки.
+
+`db.transactions.immediate_transaction(session)` открывает `BEGIN IMMEDIATE`:
+при успешном выходе делает commit, при исключении — rollback. Вызов должен быть
+**до любых запросов** в этой сессии: проверки доступа выполняются уже внутри него.
+Именно так операции регистрации и ручного назначения сериализуют проверки и запись.
+Для будущих сервисов, которым нужна такая блокировка:
+
+```python
+async with immediate_transaction(session):
+    group = await require_group_owner(session, actor_id=actor_id, group_id=group_id)
+    # Проверить входные данные и изменить разрешённый объект.
+# Успех сообщаем только после выхода из блока.
+```
+
+Ошибка неверного кода — особый случай: счётчик сначала коммитится, затем сервис
+выбрасывает `InvalidRegistrationCode` или `RegistrationBlocked`. Не оборачивайте
+`register_teacher` и `grant_teacher` во внешнюю транзакцию. События одного пользователя
+в диалогах сериализованы `SimpleEventIsolation`; лимит попыток дополнительно
+защищён SQLite-блокировкой и работает между отдельными сессиями.
+
+## Общая схема после этапа 2
 
 Модели импортируются из `labdefender.db.models`. Таблицы создаются при запуске.
 
@@ -95,6 +139,8 @@ SQLAlchemy само начинает транзакцию: не вызываем
 - `DefenseDay`: `id`, `assignment_id`, `date`, положительный `capacity`;
   пара `(assignment_id, date)` уникальна.
 - `QueueEntry`: `id`, `defense_day_id`, уникальный `submission_id`, `order_at`.
+- `TeacherRegistrationAttempt`: `user_id` как PK/FK, `failed_attempts`,
+  `window_started_at`. Хранит только счётчик и начало окна, не код.
 
 Foreign key включены на каждом SQLite-соединении. Удаления пока не поддерживаем;
 каскадного удаления учебных данных нет. Даты дней защиты — календарные даты;
@@ -122,12 +168,14 @@ erDiagram
 
 ## Разделение следующих сервисов
 
-Имена ниже — договорённость для следующих этапов; сейчас реализован только
-`services.users.ensure_user`. Не импортируйте будущие функции до их реализации.
+Уже реализованы `services.users.ensure_user`, `services.auth.register_teacher`,
+`services.auth.grant_teacher` и проверки `services.access`. Функции регистрации
+возвращают `True` при смене роли, `False`, если она уже выдана, либо доменную ошибку.
+Они принимают внутренний `actor_id`; `grant_teacher` дополнительно получает
+`target_telegram_id` и `admin_ids` из настроек. Остальные сервисы ниже ещё предстоит
+реализовать — не импортируйте будущие функции до их появления.
 
-- Ядро: `services/auth.py` — выдача роли и проверка админа;
-  `services/access.py` — проверки владельца и членства;
-  `services/groups.py` — `create_group`, `list_groups`, `get_invite_link`, `join_group`.
+- Ядро: `services/groups.py` — `create_group`, `list_groups`, `get_invite_link`, `join_group`.
 - Задания: `services/assignments.py` — публикация и чтение разрешённых заданий.
 - Попытки: `services/submissions.py` — сдача, чтение, допуск и возврат;
   один файл обслуживает оба интерфейса.

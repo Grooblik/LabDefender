@@ -17,6 +17,23 @@ class Settings(BaseSettings):
         default="sqlite+aiosqlite:///./data/labdefender.sqlite3", min_length=1
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    teacher_registration_code: SecretStr = SecretStr("")
+    admin_ids: frozenset[int] = frozenset()
+
+    @field_validator("teacher_registration_code")
+    @classmethod
+    def normalize_registration_code(cls, value: SecretStr) -> SecretStr:
+        code = value.get_secret_value().strip()
+        if code.startswith("/") or len(code) > 4096:
+            raise ValueError("Код должен помещаться в сообщение и не начинаться с /")
+        return SecretStr(code)
+
+    @field_validator("admin_ids")
+    @classmethod
+    def valid_admin_ids(cls, value: frozenset[int]) -> frozenset[int]:
+        if any(telegram_id <= 0 or telegram_id >= 2**63 for telegram_id in value):
+            raise ValueError("ADMIN_IDS должен содержать положительные Telegram ID")
+        return value
 
     @field_validator("bot_token")
     @classmethod

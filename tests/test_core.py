@@ -56,7 +56,13 @@ def callback_update():
 
 
 def test_config_keeps_token_secret_and_rejects_invalid_values(monkeypatch):
-    for variable in ("BOT_TOKEN", "DATABASE_URL", "LOG_LEVEL"):
+    for variable in (
+        "BOT_TOKEN",
+        "DATABASE_URL",
+        "LOG_LEVEL",
+        "TEACHER_REGISTRATION_CODE",
+        "ADMIN_IDS",
+    ):
         monkeypatch.delenv(variable, raising=False)
     settings = Settings(bot_token=TOKEN, _env_file=None)
     assert TOKEN not in repr(settings)
@@ -129,6 +135,7 @@ async def test_schema_and_foreign_keys(database):
             "submissions",
             "defense_days",
             "queue_entries",
+            "teacher_registration_attempts",
         }
         assert await connection.scalar(text("PRAGMA foreign_keys")) == 1
     async with sessions() as session:
