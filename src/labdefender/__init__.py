@@ -1,0 +1,1 @@
+"""LabDefender application."""
