@@ -6,6 +6,7 @@ from pydantic_settings import SettingsError
 
 from labdefender.app import run
 from labdefender.config import Settings
+from labdefender.local import LocalOperationError
 
 
 def main() -> None:
@@ -26,6 +27,8 @@ def main() -> None:
         asyncio.run(run(settings))
     except KeyboardInterrupt:
         pass
+    except LocalOperationError as error:
+        raise SystemExit(str(error)) from None
 
 
 if __name__ == "__main__":

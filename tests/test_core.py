@@ -158,6 +158,13 @@ async def test_start_registers_once_and_answers_in_russian(database, bot):
         assert await session.scalar(select(func.count()).select_from(User)) == 1
 
 
+async def test_id_command_returns_callers_telegram_id(database, bot):
+    _, sessions = database
+    dispatcher = create_dispatcher(sessions)
+    await dispatcher.feed_update(bot, message_update("/id", user_id=99887766))
+    assert bot.session.calls[-1].text == "Ваш Telegram ID: 99887766"
+
+
 @pytest.mark.parametrize("command", ["/cancel", "/start"])
 async def test_common_commands_clear_dialogue(database, bot, command):
     _, sessions = database

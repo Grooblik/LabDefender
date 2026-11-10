@@ -57,7 +57,8 @@ def create_router() -> Router:
         )
         await message.answer(
             "LabDefender — сдача и защита лабораторных работ.\n\n"
-            "/start — начать\n/help — помощь\n/cancel — отменить текущий ввод"
+            "/start — начать\n/help — помощь\n/id — мой Telegram ID"
+            "\n/cancel — отменить текущий ввод"
             "\n/my_groups — мои группы"
             "\n/queue — защита и очередь"
             f"{teacher_help}{admin_help}"
@@ -67,6 +68,10 @@ def create_router() -> Router:
     async def cancel(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Ввод отменён. Сохранённые данные не изменены.\nПомощь: /help")
+
+    @router.message(Command("id"))
+    async def my_id(message: Message, current_user: User) -> None:
+        await message.answer(f"Ваш Telegram ID: {current_user.telegram_id}")
 
     router.include_router(registration.create_router())
     return router

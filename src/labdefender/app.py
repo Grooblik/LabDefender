@@ -1,15 +1,18 @@
 import logging
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.types import BotCommand, CallbackQuery, Message
 from pydantic import SecretStr
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from labdefender.config import Settings
 from labdefender.db.session import create_database, initialize_database
 from labdefender.handlers import common, student, teacher
+from labdefender.local import database_path, instance_locks
 from labdefender.middlewares.database import DatabaseMiddleware
 from labdefender.middlewares.domain_errors import DomainErrorMiddleware
 
@@ -53,7 +56,16 @@ def create_dispatcher(
 
 
 async def run(settings: Settings) -> None:
-    engine, session_factory = create_database(settings.database_url)
+    path = database_path(settings.database_url)
+    bot_id = int(settings.bot_token.get_secret_value().split(":", 1)[0])
+    with instance_locks(path, bot_id=bot_id):
+        await _run(settings, path)
+
+
+async def _run(settings: Settings, path: Path) -> None:
+    engine, session_factory = create_database(
+        str(URL.create("sqlite+aiosqlite", database=str(path)))
+    )
     try:
         await initialize_database(engine)
         dispatcher = create_dispatcher(session_factory, settings=settings)
@@ -63,6 +75,7 @@ async def run(settings: Settings) -> None:
                 [
                     BotCommand(command="start", description="Начать"),
                     BotCommand(command="help", description="Помощь"),
+                    BotCommand(command="id", description="Мой Telegram ID"),
                     BotCommand(command="cancel", description="Отменить ввод"),
                     BotCommand(command="teacher", description="Доступ преподавателя"),
                     BotCommand(command="my_groups", description="Мои группы"),
