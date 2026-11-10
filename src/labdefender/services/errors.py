@@ -5,6 +5,44 @@ class DomainError(Exception):
     """Expected business error with a message safe to show to the user."""
 
 
+class InvalidDefenseDay(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Укажите дату YYYY-MM-DD не раньше сегодняшней по Москве и положительный лимит мест."
+        )
+
+
+class DefenseDayExists(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "На эту дату у задания уже есть день защиты с другим лимитом. Откройте /queue."
+        )
+
+
+class ApprovalRequired(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Для записи на защиту нужен допуск последней попытки. Проверьте /assignments."
+        )
+
+
+class DefenseDayClosed(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Эта дата уже прошла. Выберите другой день защиты.")
+
+
+class DefenseDayFull(DomainError):
+    def __init__(self) -> None:
+        super().__init__("На выбранный день мест нет. Прежняя запись сохранена, если она была.")
+
+
+class QueueChanged(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Ваша запись изменилась или недоступна. Откройте очередь заново через /queue."
+        )
+
+
 class InvalidAssignment(DomainError):
     def __init__(self) -> None:
         super().__init__("Нужно название от 1 до 256 символов и условие до 4000 символов.")

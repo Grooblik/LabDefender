@@ -12,6 +12,7 @@ dependencies = [
     "SQLAlchemy[asyncio]>=2.0.40,<2.1",
     "aiosqlite>=0.21,<1",
     "pydantic-settings>=2.9,<3",
+    "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]

@@ -10,6 +10,7 @@ from labdefender.keyboards.coursework import (
     TeacherCourseCallback,
     selection_keyboard,
 )
+from labdefender.keyboards.defense import StudentQueueCallback, TeacherQueueCallback
 from labdefender.services.assignments import get_assignment, list_assignments
 from labdefender.services.errors import SolutionDeliveryUnavailable, StaleCourseAction
 from labdefender.services.groups import get_group, list_groups
@@ -133,6 +134,13 @@ async def show_student_assignment(
         buttons.append(
             ("Мои попытки", StudentCourseCallback(action="history", object_id=assignment_id).pack())
         )
+        if latest.status == SubmissionStatus.APPROVED:
+            buttons.append(
+                (
+                    "Защита и очередь",
+                    StudentQueueCallback(action="status", object_id=assignment_id).pack(),
+                )
+            )
     buttons.append(
         (
             "Задания группы",
@@ -160,6 +168,16 @@ async def show_submissions(
     teacher = user.role == Role.TEACHER
     factory = TeacherCourseCallback if teacher else StudentCourseCallback
     action, page_action = ("open", "attempts") if teacher else ("attempt", "history")
+    extra_buttons = (
+        [
+            (
+                "Дни защиты и очередь",
+                TeacherQueueCallback(action="days", object_id=assignment_id).pack(),
+            )
+        ]
+        if teacher
+        else []
+    )
     await send_text(
         message,
         f"Задание: {assignment.title}\n"
@@ -172,7 +190,8 @@ async def show_submissions(
                     factory(action=action, object_id=item.submission.id).pack(),
                 )
                 for item in page.items
-            ],
+            ]
+            + extra_buttons,
             previous=factory(
                 action=page_action, object_id=assignment_id, offset=max(0, offset - PAGE_SIZE)
             ).pack()
