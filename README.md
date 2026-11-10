@@ -6,7 +6,6 @@ SQLAlchemy 2, SQLite, polling. Интерфейс на русском, отде�
 ## Документация
 
 - [Сценарии ядра и графы](docs/core-scenarios.md)
-- [План реализации и готовые этапы](docs/implementation-plan.md)
 - [Подключение модулей студента и преподавателя](docs/integration.md)
 
 ## Локальный запуск
