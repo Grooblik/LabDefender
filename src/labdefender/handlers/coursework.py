@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, LinkPreviewOptions, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
-from labdefender.enums import Role, SubmissionStatus
+from labdefender.enums import AssignmentFormat, Role, SubmissionStatus
 from labdefender.keyboards.coursework import (
     StudentCourseCallback,
     TeacherCourseCallback,
@@ -21,6 +21,15 @@ from labdefender.services.submissions import (
     latest_submission,
     list_submissions,
 )
+
+FORMAT_LABELS = {
+    AssignmentFormat.ONLINE: "онлайн",
+    AssignmentFormat.IN_PERSON: "очная",
+}
+
+
+def format_label(value: AssignmentFormat) -> str:
+    return FORMAT_LABELS.get(value, value.value)
 
 
 async def send_text(
@@ -98,7 +107,10 @@ async def show_assignments(
         + ("Выберите задание:" if page.items else "Заданий на этой странице нет."),
         reply_markup=selection_keyboard(
             [
-                (f"#{item.id} · {item.title}", factory(action=action, object_id=item.id).pack())
+                (
+                    f"#{item.id} · {item.title} · {format_label(item.format)}",
+                    factory(action=action, object_id=item.id).pack(),
+                )
                 for item in page.items
             ],
             previous=factory(
@@ -148,7 +160,9 @@ async def show_student_assignment(
         )
     )
     await send_text(
-        message, f"Группа: {group.name}\nЗадание: {assignment.title}\n\n{assignment.description}"
+        message,
+        f"Группа: {group.name}\nЗадание: {assignment.title}\n"
+        f"Формат сдачи: {format_label(assignment.format)}\n\n{assignment.description}",
     )
     comment = (
         f"\nКомментарий преподавателя: {latest.review_comment}"
@@ -171,7 +185,7 @@ async def show_submissions(
     extra_buttons = (
         [
             (
-                "Дни защиты и очередь",
+                "Слоты защиты и очередь",
                 TeacherQueueCallback(action="days", object_id=assignment_id).pack(),
             )
         ]
@@ -180,7 +194,7 @@ async def show_submissions(
     )
     await send_text(
         message,
-        f"Задание: {assignment.title}\n"
+        f"Задание: {assignment.title}\nФормат сдачи: {format_label(assignment.format)}\n"
         + ("Выберите попытку:" if page.items else "Попыток на этой странице нет."),
         reply_markup=selection_keyboard(
             [
@@ -243,6 +257,7 @@ async def show_submission(
     await send_text(
         message,
         f"Группа: {detail.group.name}\nЗадание: {detail.assignment.title}\n"
+        f"Формат сдачи: {format_label(detail.assignment.format)}\n"
         f"Студент: {detail.student.full_name}\nПопытка №{submission.attempt_number}\n"
         f"Статус: {STATUS_LABELS[submission.status]}{comment}",
     )

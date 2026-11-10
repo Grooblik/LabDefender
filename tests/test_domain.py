@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 
 import pytest
 from sqlalchemy import select
@@ -6,14 +6,14 @@ from sqlalchemy.exc import IntegrityError
 
 from labdefender.db.models import (
     Assignment,
-    DefenseDay,
+    DefenseSlot,
     Membership,
     QueueEntry,
     StudyGroup,
     Submission,
     User,
 )
-from labdefender.enums import Role, SubmissionKind, SubmissionStatus
+from labdefender.enums import AssignmentFormat, Role, SubmissionKind, SubmissionStatus
 
 
 @pytest.fixture
@@ -28,7 +28,12 @@ async def learning_context(database):
         session.add(group)
         await session.flush()
         session.add(Membership(group_id=group.id, student_id=student.id))
-        assignment = Assignment(group_id=group.id, title="ЛР 1", description="Условие")
+        assignment = Assignment(
+            group_id=group.id,
+            title="ЛР 1",
+            description="Условие",
+            format=AssignmentFormat.ONLINE,
+        )
         session.add(assignment)
         await session.commit()
         return sessions, assignment.id, student.id
@@ -48,20 +53,24 @@ async def test_shared_schema_stores_solution_review_and_queue(learning_context):
             status=SubmissionStatus.APPROVED,
             approved_at=approved_at,
         )
-        day = DefenseDay(assignment_id=assignment_id, date=date(2026, 11, 13), capacity=1)
+        day = DefenseSlot(
+            assignment_id=assignment_id,
+            date=date(2026, 11, 13),
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+            capacity=1,
+        )
         session.add_all([submission, day])
         await session.flush()
-        session.add(
-            QueueEntry(defense_day_id=day.id, submission_id=submission.id, order_at=approved_at)
-        )
+        session.add(QueueEntry(slot_id=day.id, submission_id=submission.id, order_at=approved_at))
         await session.commit()
 
     async with sessions() as session:
         entry, stored_submission, stored_day = (
             await session.execute(
-                select(QueueEntry, Submission, DefenseDay)
+                select(QueueEntry, Submission, DefenseSlot)
                 .join(Submission, QueueEntry.submission_id == Submission.id)
-                .join(DefenseDay, QueueEntry.defense_day_id == DefenseDay.id)
+                .join(DefenseSlot, QueueEntry.slot_id == DefenseSlot.id)
             )
         ).one()
         assert stored_submission.file_id == "telegram-file-id"

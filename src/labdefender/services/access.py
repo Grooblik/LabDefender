@@ -1,7 +1,14 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from labdefender.db.models import Assignment, DefenseDay, Membership, StudyGroup, Submission, User
+from labdefender.db.models import (
+    Assignment,
+    DefenseSlot,
+    Membership,
+    StudyGroup,
+    Submission,
+    User,
+)
 from labdefender.enums import Role
 from labdefender.services.errors import AccessDenied, ObjectUnavailable
 
@@ -66,11 +73,11 @@ async def require_submission_access(
     return submission
 
 
-async def require_defense_day_access(
-    session: AsyncSession, *, actor_id: int, defense_day_id: int
-) -> DefenseDay:
-    day = await session.get(DefenseDay, defense_day_id)
-    if day is None:
+async def require_defense_slot_access(
+    session: AsyncSession, *, actor_id: int, slot_id: int
+) -> DefenseSlot:
+    slot = await session.get(DefenseSlot, slot_id)
+    if slot is None:
         raise ObjectUnavailable()
-    await require_assignment_access(session, actor_id=actor_id, assignment_id=day.assignment_id)
-    return day
+    await require_assignment_access(session, actor_id=actor_id, assignment_id=slot.assignment_id)
+    return slot

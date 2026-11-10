@@ -133,7 +133,7 @@ async def test_schema_and_foreign_keys(database):
             "memberships",
             "assignments",
             "submissions",
-            "defense_days",
+            "defense_slots",
             "queue_entries",
             "teacher_registration_attempts",
         }

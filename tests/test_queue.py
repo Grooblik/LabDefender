@@ -1,5 +1,6 @@
 import asyncio
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram.exceptions import TelegramNetworkError
@@ -8,9 +9,9 @@ from aiogram.types import Update
 from sqlalchemy import func, select
 
 from labdefender.app import create_dispatcher
-from labdefender.db.models import DefenseDay, Membership, QueueEntry, Submission
+from labdefender.db.models import DefenseSlot, Membership, QueueEntry, Submission
 from labdefender.db.session import create_database, initialize_database
-from labdefender.enums import Role, SubmissionStatus
+from labdefender.enums import AssignmentFormat, Role, SubmissionStatus
 from labdefender.keyboards.defense import (
     StudentQueueCallback,
     StudentQueueDraftCallback,
@@ -19,22 +20,29 @@ from labdefender.keyboards.defense import (
 from labdefender.services.assignments import create_assignment
 from labdefender.services.errors import (
     ApprovalRequired,
-    DefenseDayClosed,
-    DefenseDayExists,
-    DefenseDayFull,
+    DefenseSlotClosed,
+    DefenseSlotExists,
+    DefenseSlotFull,
+    DefenseSlotNotEmpty,
+    DefenseSlotOverlap,
     DomainError,
-    InvalidDefenseDay,
+    InvalidAssignmentFormat,
+    InvalidDefenseSlot,
     ObjectUnavailable,
     QueueChanged,
 )
 from labdefender.services.groups import create_group
 from labdefender.services.queue import (
-    create_defense_day,
-    enroll_day,
-    get_day_queue,
+    cancel_defense_slot,
+    close_defense_slot,
+    create_defense_slot,
+    enroll_slot,
+    get_slot_queue,
     get_student_booking,
-    list_defense_days,
+    list_approved_unassigned,
+    list_defense_slots,
     move_to_end,
+    reopen_defense_slot,
     today_moscow,
 )
 from labdefender.services.submissions import review_submission, submit_solution, text_solution
@@ -42,11 +50,12 @@ from labdefender.services.users import ensure_user
 
 TODAY = date(2026, 11, 10)
 NOW = datetime(2026, 11, 10, 10)
+NOW_MOSCOW = datetime(2026, 11, 10, 10, tzinfo=ZoneInfo("Europe/Moscow"))
 
 
 @pytest.fixture
 async def context(database, monkeypatch):
-    monkeypatch.setattr("labdefender.services.queue.today_moscow", lambda: TODAY)
+    monkeypatch.setattr("labdefender.services.queue.now_moscow", lambda: NOW_MOSCOW)
     monkeypatch.setattr("labdefender.services.queue.utc_now", lambda: NOW)
     _, sessions = database
     ids, submissions = {}, {}
@@ -74,7 +83,12 @@ async def context(database, monkeypatch):
         await session.commit()
     async with sessions() as session:
         assignment = await create_assignment(
-            session, actor_id=ids[101], group_id=group.id, title="ЛР 1", description="Task"
+            session,
+            actor_id=ids[101],
+            group_id=group.id,
+            title="ЛР 1",
+            description="Task",
+            format=AssignmentFormat.ONLINE,
         )
     for index, number in enumerate((202, 203, 204)):
         async with sessions() as session:
@@ -98,26 +112,35 @@ async def context(database, monkeypatch):
     return sessions, ids, group, assignment, submissions
 
 
-async def day(context, *, capacity=3, day_date=TODAY + timedelta(days=1)):
+async def day(
+    context,
+    *,
+    capacity=3,
+    day_date=TODAY + timedelta(days=1),
+    start_time=time(14, 0),
+    end_time=time(16, 0),
+):
     sessions, ids, _, assignment, _ = context
     async with sessions() as session:
-        return await create_defense_day(
+        return await create_defense_slot(
             session,
             actor_id=ids[101],
             assignment_id=assignment.id,
             day_date=day_date,
+            start_time=start_time,
+            end_time=end_time,
             capacity=capacity,
         )
 
 
-async def book(context, defense_day, *, student=202, previous=None):
+async def book(context, slot, *, student=202, previous=None):
     sessions, ids, _, assignment, _ = context
     async with sessions() as session:
-        return await enroll_day(
+        return await enroll_slot(
             session,
             actor_id=ids[student],
             assignment_id=assignment.id,
-            defense_day_id=defense_day.id,
+            slot_id=slot.id,
             expected_entry_id=previous.id if previous else None,
             expected_order_at=previous.order_at if previous else None,
         )
@@ -144,15 +167,15 @@ async def booking(context, *, student=202):
 
 
 async def test_initial_order_uses_approval_time_even_when_booking_later(context):
-    defense_day = await day(context)
-    await book(context, defense_day, student=203)
-    first = await book(context, defense_day)
+    slot = await day(context)
+    await book(context, slot, student=203)
+    first = await book(context, slot)
     assert (await booking(context)).position == 1
     assert (await booking(context, student=203)).position == 2
     sessions, ids, _, _, submissions = context
     async with sessions() as session:
         assert first.order_at == (await session.get(Submission, submissions[202])).approved_at
-        queue = await get_day_queue(session, actor_id=ids[101], defense_day_id=defense_day.id)
+        queue = await get_slot_queue(session, actor_id=ids[101], slot_id=slot.id)
         assert [member.student_name for member in queue.members.items] == ["User202", "User203"]
         assert [member.position for member in queue.members.items] == [1, 2]
 
@@ -163,28 +186,28 @@ async def test_equal_approval_timestamps_use_entry_id_for_stable_order(context):
         for student in (202, 203):
             (await session.get(Submission, submissions[student])).approved_at = NOW
         await session.commit()
-    defense_day = await day(context)
-    await book(context, defense_day, student=203)
-    await book(context, defense_day)
+    slot = await day(context)
+    await book(context, slot, student=203)
+    await book(context, slot)
     assert (await booking(context, student=203)).position == 1
     assert (await booking(context)).position == 2
 
 
 async def test_parallel_requests_for_last_seat_allow_only_one(context):
-    defense_day = await day(context, capacity=1)
+    slot = await day(context, capacity=1)
     results = await asyncio.gather(
-        book(context, defense_day), book(context, defense_day, student=203), return_exceptions=True
+        book(context, slot), book(context, slot, student=203), return_exceptions=True
     )
     assert sum(isinstance(result, QueueEntry) for result in results) == 1
-    assert sum(isinstance(result, DefenseDayFull) for result in results) == 1
+    assert sum(isinstance(result, DefenseSlotFull) for result in results) == 1
     sessions, *_ = context
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(QueueEntry)) == 1
 
 
 async def test_parallel_duplicate_booking_uses_one_seat_and_preserves_order(context):
-    defense_day = await day(context, capacity=1)
-    first, repeated = await asyncio.gather(book(context, defense_day), book(context, defense_day))
+    slot = await day(context, capacity=1)
+    first, repeated = await asyncio.gather(book(context, slot), book(context, slot))
     assert first.id == repeated.id
     assert first.order_at == repeated.order_at
     assert (await booking(context)).occupied == 1
@@ -195,10 +218,10 @@ async def test_failed_switch_preserves_previous_day_and_order(context):
     full_day = await day(context, capacity=1, day_date=TODAY + timedelta(days=2))
     entry = await book(context, old_day)
     await book(context, full_day, student=203)
-    with pytest.raises(DefenseDayFull):
+    with pytest.raises(DefenseSlotFull):
         await book(context, full_day, previous=entry)
     saved = await booking(context)
-    assert saved.day.id == old_day.id
+    assert saved.slot.id == old_day.id
     assert saved.entry.order_at == entry.order_at
     assert saved.occupied == 1
 
@@ -214,9 +237,7 @@ async def test_successful_switch_moves_existing_record_to_target_tail(context):
     assert (await booking(context, student=203)).occupied == 2
     sessions, ids, _, _, submissions = context
     async with sessions() as session:
-        assert (
-            await get_day_queue(session, actor_id=ids[101], defense_day_id=old_day.id)
-        ).occupied == 0
+        assert (await get_slot_queue(session, actor_id=ids[101], slot_id=old_day.id)).occupied == 0
         assert (await session.get(Submission, submissions[202])).approved_at == entry.order_at
         assert await session.scalar(select(func.count()).select_from(QueueEntry)) == 2
 
@@ -226,9 +247,9 @@ async def test_move_is_strictly_after_tail_and_repeated_old_version_is_rejected(
     async with sessions() as session:
         (await session.get(Submission, submissions[203])).approved_at = NOW
         await session.commit()
-    defense_day = await day(context)
-    entry = await book(context, defense_day)
-    await book(context, defense_day, student=203)
+    slot = await day(context)
+    entry = await book(context, slot)
+    await book(context, slot, student=203)
     moved = await move(context, entry)
     assert moved.order_at == NOW + timedelta(microseconds=1)
     assert (await booking(context)).position == 2
@@ -238,16 +259,16 @@ async def test_move_is_strictly_after_tail_and_repeated_old_version_is_rejected(
 
 
 async def test_moving_last_entry_is_idempotent_without_timestamp_change(context):
-    defense_day = await day(context)
-    entry = await book(context, defense_day)
+    slot = await day(context)
+    entry = await book(context, slot)
     assert (await move(context, entry)).order_at == entry.order_at
     assert (await move(context, entry)).order_at == entry.order_at
 
 
 async def test_parallel_moves_do_not_apply_twice(context):
-    defense_day = await day(context)
-    entry = await book(context, defense_day)
-    await book(context, defense_day, student=203)
+    slot = await day(context)
+    entry = await book(context, slot)
+    await book(context, slot, student=203)
     results = await asyncio.gather(
         move(context, entry), move(context, entry), return_exceptions=True
     )
@@ -264,21 +285,21 @@ async def test_stale_snapshot_cannot_switch_back_or_move_another_student(context
         await book(context, first_day, previous=old)
     with pytest.raises(QueueChanged):
         await move(context, current, student=203)
-    assert (await booking(context)).day.id == second_day.id
+    assert (await booking(context)).slot.id == second_day.id
 
 
 @pytest.mark.parametrize(
     "capacity,day_date", [(0, TODAY), (-1, TODAY), (2**31, TODAY), (1, TODAY - timedelta(days=1))]
 )
 async def test_invalid_day_parameters_are_rejected(context, capacity, day_date):
-    with pytest.raises(InvalidDefenseDay):
+    with pytest.raises(InvalidDefenseSlot):
         await day(context, capacity=capacity, day_date=day_date)
 
 
 async def test_duplicate_day_is_idempotent_but_different_capacity_does_not_overwrite(context):
     first = await day(context)
     assert (await day(context)).id == first.id
-    with pytest.raises(DefenseDayExists):
+    with pytest.raises(DefenseSlotExists):
         await day(context, capacity=5)
 
 
@@ -286,7 +307,12 @@ async def test_no_approval_and_wrong_assignment_cannot_book(context):
     sessions, ids, group, assignment, _ = context
     async with sessions() as session:
         unapproved = await create_assignment(
-            session, actor_id=ids[101], group_id=group.id, title="Pending task", description="Task"
+            session,
+            actor_id=ids[101],
+            group_id=group.id,
+            title="Pending task",
+            description="Task",
+            format=AssignmentFormat.ONLINE,
         )
     async with sessions() as session:
         pending = await submit_solution(
@@ -297,26 +323,32 @@ async def test_no_approval_and_wrong_assignment_cannot_book(context):
             solution=text_solution("Work"),
         )
     async with sessions() as session:
-        target = await create_defense_day(
-            session, actor_id=ids[101], assignment_id=unapproved.id, day_date=TODAY, capacity=1
+        target = await create_defense_slot(
+            session,
+            actor_id=ids[101],
+            assignment_id=unapproved.id,
+            day_date=TODAY,
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+            capacity=1,
         )
     async with sessions() as session:
         with pytest.raises(ApprovalRequired):
-            await enroll_day(
+            await enroll_slot(
                 session,
                 actor_id=ids[202],
                 assignment_id=unapproved.id,
-                defense_day_id=target.id,
+                slot_id=target.id,
                 expected_entry_id=None,
                 expected_order_at=None,
             )
     async with sessions() as session:
         with pytest.raises(ObjectUnavailable):
-            await enroll_day(
+            await enroll_slot(
                 session,
                 actor_id=ids[202],
                 assignment_id=assignment.id,
-                defense_day_id=target.id,
+                slot_id=target.id,
                 expected_entry_id=None,
                 expected_order_at=None,
             )
@@ -327,60 +359,66 @@ async def test_no_approval_and_wrong_assignment_cannot_book(context):
 
 async def test_roles_and_foreign_groups_cannot_read_or_mutate_queue(context):
     sessions, ids, _, assignment, _ = context
-    defense_day = await day(context)
+    slot = await day(context)
     for actor in (202, 303, 404):
         async with sessions() as session:
             with pytest.raises(DomainError):
-                await get_day_queue(session, actor_id=ids[actor], defense_day_id=defense_day.id)
+                await get_slot_queue(session, actor_id=ids[actor], slot_id=slot.id)
     for actor in (101, 303, 404):
         async with sessions() as session:
             with pytest.raises(DomainError):
-                await enroll_day(
+                await enroll_slot(
                     session,
                     actor_id=ids[actor],
                     assignment_id=assignment.id,
-                    defense_day_id=defense_day.id,
+                    slot_id=slot.id,
                     expected_entry_id=None,
                     expected_order_at=None,
                 )
     async with sessions() as session:
         with pytest.raises(DomainError):
-            await create_defense_day(
-                session, actor_id=ids[303], assignment_id=assignment.id, day_date=TODAY, capacity=1
+            await create_defense_slot(
+                session,
+                actor_id=ids[303],
+                assignment_id=assignment.id,
+                day_date=TODAY,
+                start_time=time(14, 0),
+                end_time=time(16, 0),
+                capacity=1,
             )
 
 
 async def test_past_days_are_hidden_from_students_and_closed_for_writes(context, monkeypatch):
-    defense_day = await day(context)
-    entry = await book(context, defense_day)
+    slot = await day(context)
+    entry = await book(context, slot)
     monkeypatch.setattr(
-        "labdefender.services.queue.today_moscow", lambda: TODAY + timedelta(days=2)
+        "labdefender.services.queue.now_moscow", lambda: NOW_MOSCOW + timedelta(days=2)
     )
     sessions, ids, _, assignment, _ = context
     async with sessions() as session:
         assert not (
-            await list_defense_days(session, actor_id=ids[202], assignment_id=assignment.id)
+            await list_defense_slots(session, actor_id=ids[202], assignment_id=assignment.id)
         ).items
         assert (
-            await list_defense_days(session, actor_id=ids[101], assignment_id=assignment.id)
-        ).items[0].day.id == defense_day.id
-    with pytest.raises(DefenseDayClosed):
-        await book(context, defense_day, student=203)
-    with pytest.raises(DefenseDayClosed):
+            await list_defense_slots(session, actor_id=ids[101], assignment_id=assignment.id)
+        ).items[0].slot.id == slot.id
+    with pytest.raises(DefenseSlotClosed):
+        await book(context, slot, student=203)
+    with pytest.raises(DefenseSlotClosed):
         await move(context, entry)
 
 
 async def test_today_is_available_and_uses_moscow_day_boundary(context):
-    defense_day = await day(context, day_date=TODAY)
-    await book(context, defense_day)
+    slot = await day(context, day_date=TODAY)
+    await book(context, slot)
     assert today_moscow(datetime(2026, 11, 10, 21, 30, tzinfo=UTC)) == date(2026, 11, 11)
     assert today_moscow(datetime(2026, 11, 10, 20, 59, tzinfo=UTC)) == TODAY
 
 
 async def test_queue_survives_database_reopen(context, database):
-    defense_day = await day(context)
-    await book(context, defense_day)
-    await book(context, defense_day, student=203)
+    slot = await day(context)
+    await book(context, slot)
+    await book(context, slot, student=203)
     original = await booking(context)
     sessions, ids, _, assignment, _ = context
     old_engine, _ = database
@@ -396,6 +434,92 @@ async def test_queue_survives_database_reopen(context, database):
             assert stored.entry.order_at == original.entry.order_at
     finally:
         await engine.dispose()
+
+
+async def test_assignment_format_is_persisted_and_validated(context):
+    sessions, ids, group, _, _ = context
+    async with sessions() as session:
+        created = await create_assignment(
+            session,
+            actor_id=ids[101],
+            group_id=group.id,
+            title="Очная работа",
+            description="Task",
+            format=AssignmentFormat.IN_PERSON,
+        )
+        assert created.format == AssignmentFormat.IN_PERSON
+    async with sessions() as session:
+        with pytest.raises(InvalidAssignmentFormat):
+            await create_assignment(
+                session,
+                actor_id=ids[101],
+                group_id=group.id,
+                title="Плохой формат",
+                description="Task",
+                format="bad",
+            )
+
+
+async def test_multiple_slots_per_day_and_overlap_validation(context):
+    first = await day(context, capacity=2)
+    second = await day(
+        context,
+        capacity=2,
+        start_time=time(16, 0),
+        end_time=time(18, 0),
+    )
+    assert first.id != second.id
+    with pytest.raises(DefenseSlotOverlap):
+        await day(
+            context,
+            capacity=2,
+            start_time=time(15, 0),
+            end_time=time(17, 0),
+        )
+
+
+async def test_close_reopen_and_cancel_empty_slot(context):
+    sessions, ids, _, assignment, _ = context
+    slot = await day(context, capacity=2)
+    async with sessions() as session:
+        closed = await close_defense_slot(session, actor_id=ids[101], slot_id=slot.id)
+        assert not closed.is_open
+    with pytest.raises(DefenseSlotClosed):
+        await book(context, slot, student=202)
+    async with sessions() as session:
+        reopened = await reopen_defense_slot(session, actor_id=ids[101], slot_id=slot.id)
+        assert reopened.is_open
+    await book(context, slot, student=202)
+    async with sessions() as session:
+        with pytest.raises(DefenseSlotNotEmpty):
+            await cancel_defense_slot(session, actor_id=ids[101], slot_id=slot.id)
+    empty = await day(context, capacity=1, day_date=TODAY + timedelta(days=2))
+    async with sessions() as session:
+        removed = await cancel_defense_slot(session, actor_id=ids[101], slot_id=empty.id)
+        assert removed.id == empty.id
+    with pytest.raises(ObjectUnavailable):
+        await book(context, empty, student=203)
+
+
+async def test_teacher_sees_approved_students_without_slot(context):
+    sessions, ids, _, assignment, _ = context
+    async with sessions() as session:
+        page = await list_approved_unassigned(
+            session, actor_id=ids[101], assignment_id=assignment.id
+        )
+        assert {item.student_name for item in page.items} == {"User202", "User203", "User204"}
+    slot = await day(context, capacity=2)
+    await book(context, slot, student=202)
+    async with sessions() as session:
+        page = await list_approved_unassigned(
+            session, actor_id=ids[101], assignment_id=assignment.id
+        )
+        names = {item.student_name for item in page.items}
+        assert "User202" not in names
+        assert {"User203", "User204"} <= names
+    async with sessions() as session:
+        with pytest.raises(DomainError):
+            await list_approved_unassigned(session, actor_id=ids[202], assignment_id=assignment.id)
 
 
 def message_update(text, *, user_id=101):
@@ -443,22 +567,28 @@ async def press(dispatcher, bot, callback, *, user=101):
     )
 
 
-async def prepare_booking(dispatcher, bot, defense_day, *, user=202):
+async def prepare_booking(dispatcher, bot, slot, *, user=202):
     await press(
-        dispatcher, bot, StudentQueueCallback(action="choose", object_id=defense_day.id), user=user
+        dispatcher, bot, StudentQueueCallback(action="choose", object_id=slot.id), user=user
     )
     return first_button(bot)
 
 
-async def test_full_bot_day_creation_booking_position_move_and_teacher_queue(context, bot):
+async def test_full_bot_slot_creation_booking_position_move_and_teacher_queue(context, bot):
     sessions, ids, _, assignment, _ = context
     dispatcher = create_dispatcher(sessions)
-    await dispatcher.feed_update(bot, message_update("/new_defense_day"))
+    await dispatcher.feed_update(bot, message_update("/new_slot"))
     await press(dispatcher, bot, first_button(bot))
     await press(dispatcher, bot, first_button(bot))
     await dispatcher.feed_update(bot, message_update("not-a-date"))
     assert "YYYY-MM-DD" in messages(bot)[-1].text
     await dispatcher.feed_update(bot, message_update("2026-11-11"))
+    await dispatcher.feed_update(bot, message_update("not-a-time"))
+    assert "HH:MM" in messages(bot)[-1].text
+    await dispatcher.feed_update(bot, message_update("14:00"))
+    await dispatcher.feed_update(bot, message_update("13:00"))
+    assert "конец позже начала" in messages(bot)[-1].text
+    await dispatcher.feed_update(bot, message_update("16:00"))
     await dispatcher.feed_update(bot, message_update("0"))
     assert "положительный лимит" in messages(bot)[-1].text
     await dispatcher.feed_update(bot, message_update("2"))
@@ -467,18 +597,18 @@ async def test_full_bot_day_creation_booking_position_move_and_teacher_queue(con
     await press(dispatcher, bot, confirmation)
     assert "устарела" in bot.session.calls[-1].text
     async with sessions() as session:
-        defense_day = await session.scalar(select(DefenseDay))
+        slot = await session.scalar(select(DefenseSlot))
     await dispatcher.feed_update(bot, message_update("/queue", user_id=202))
     await press(dispatcher, bot, first_button(bot), user=202)
     await press(dispatcher, bot, first_button(bot), user=202)
-    assert "ещё не выбрали день" in messages(bot)[-1].text
+    assert "ещё не выбрали слот" in messages(bot)[-1].text
     await press(dispatcher, bot, first_button(bot), user=202)
-    confirmation = await prepare_booking(dispatcher, bot, defense_day)
+    confirmation = await prepare_booking(dispatcher, bot, slot)
     await press(dispatcher, bot, confirmation, user=202)
     assert "Ваша позиция: 1" in messages(bot)[-1].text
     await press(dispatcher, bot, confirmation, user=202)
     assert "устарела" in bot.session.calls[-1].text
-    confirmation = await prepare_booking(dispatcher, bot, defense_day, user=203)
+    confirmation = await prepare_booking(dispatcher, bot, slot, user=203)
     await press(dispatcher, bot, confirmation, user=203)
     await press(
         dispatcher, bot, StudentQueueCallback(action="move", object_id=assignment.id), user=202
@@ -507,7 +637,7 @@ async def test_switch_can_fail_at_confirmation_without_losing_original_booking(c
     await book(context, target, student=203)
     await press(dispatcher, bot, confirmation, user=202)
     assert "мест нет" in bot.session.calls[-1].text
-    assert (await booking(context)).day.id == original_day.id
+    assert (await booking(context)).slot.id == original_day.id
 
 
 @pytest.mark.parametrize("cancel", ["/cancel", "button", "restart"])
@@ -569,7 +699,7 @@ async def test_past_booking_can_be_viewed_and_rescheduled_but_has_no_move_button
     await book(context, previous_day)
     future_day = await day(context, day_date=TODAY + timedelta(days=3))
     monkeypatch.setattr(
-        "labdefender.services.queue.today_moscow", lambda: TODAY + timedelta(days=2)
+        "labdefender.services.queue.now_moscow", lambda: NOW_MOSCOW + timedelta(days=2)
     )
     sessions, _, _, assignment, _ = context
     dispatcher = create_dispatcher(sessions)
@@ -583,4 +713,4 @@ async def test_past_booking_can_be_viewed_and_rescheduled_but_has_no_move_button
     )
     confirmation = await prepare_booking(dispatcher, bot, future_day)
     await press(dispatcher, bot, confirmation, user=202)
-    assert (await booking(context)).day.id == future_day.id
+    assert (await booking(context)).slot.id == future_day.id

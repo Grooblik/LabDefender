@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
-from labdefender.enums import SubmissionStatus
+from labdefender.enums import AssignmentFormat, SubmissionStatus
 from labdefender.filters.plain_text import PlainTextInput
 from labdefender.handlers.coursework import (
     require_draft,
@@ -18,8 +18,10 @@ from labdefender.handlers.coursework import (
     show_submissions,
 )
 from labdefender.keyboards.coursework import (
+    AssignmentFormatCallback,
     TeacherCourseCallback,
     TeacherDraftCallback,
+    assignment_format_keyboard,
     draft_keyboard,
     selection_keyboard,
 )
@@ -74,10 +76,10 @@ def create_router() -> Router:
         elif action == "publish":
             group = await require_group_owner(session, actor_id=current_user.id, group_id=object_id)
             await state.set_data({"group_id": group.id})
-            await state.set_state(AssignmentCreation.title)
+            await state.set_state(AssignmentCreation.format)
             await callback.message.answer(
-                f"Группа: {group.name}\n"
-                "Введите название задания (до 256 символов). Отмена: /cancel."
+                f"Группа: {group.name}\nВыберите формат сдачи задания.",
+                reply_markup=assignment_format_keyboard(),
             )
         elif action == "review_list":
             await show_assignments(
@@ -108,6 +110,32 @@ def create_router() -> Router:
             )
         await callback.answer()
 
+    @router.callback_query(AssignmentFormatCallback.filter())
+    async def choose_format(
+        callback: CallbackQuery,
+        callback_data: AssignmentFormatCallback,
+        state: FSMContext,
+    ) -> None:
+        if not isinstance(callback.message, Message):
+            raise StaleCourseAction()
+        if await state.get_state() != AssignmentCreation.format.state:
+            raise StaleCourseAction()
+        if callback_data.action == "cancel":
+            await state.clear()
+            await callback.message.answer("Создание задания отменено.")
+        else:
+            assignment_format = (
+                AssignmentFormat.IN_PERSON
+                if callback_data.action == "in_person"
+                else AssignmentFormat.ONLINE
+            )
+            await state.update_data(format=assignment_format.value)
+            await state.set_state(AssignmentCreation.title)
+            await callback.message.answer(
+                "Введите название задания (до 256 символов). Отмена: /cancel."
+            )
+        await callback.answer()
+
     @router.message(AssignmentCreation.title, PlainTextInput())
     async def assignment_title(message: Message, state: FSMContext) -> None:
         title = " ".join(message.text.split())
@@ -123,15 +151,18 @@ def create_router() -> Router:
     ) -> None:
         data = await state.get_data()
         title, description = validate_assignment(data["title"], message.text)
+        assignment_format = AssignmentFormat(data["format"])
         group = await require_group_owner(
             session, actor_id=current_user.id, group_id=data["group_id"]
         )
         nonce = secrets.token_hex(8)
         await state.update_data(description=description, nonce=nonce)
         await state.set_state(AssignmentCreation.confirmation)
+        format_label = "очная" if assignment_format == AssignmentFormat.IN_PERSON else "онлайн"
         await send_text(
             message,
-            f"Опубликовать в группе «{group.name}»?\n{title}\n\n{description}",
+            f"Опубликовать в группе «{group.name}»?\n"
+            f"Формат сдачи: {format_label}\n{title}\n\n{description}",
             reply_markup=draft_keyboard(nonce, teacher=True),
         )
 
@@ -158,6 +189,7 @@ def create_router() -> Router:
                 group_id=data["group_id"],
                 title=data["title"],
                 description=data["description"],
+                format=data["format"],
             )
             await state.clear()
             await callback.message.answer(
@@ -190,9 +222,18 @@ def create_router() -> Router:
         await state.clear()
         await message.answer("Работа возвращена на доработку. Комментарий доступен студенту.")
 
+    @router.message(AssignmentCreation.format)
+    async def format_requires_button(message: Message) -> None:
+        await message.answer(
+            "Выберите формат сдачи кнопкой выше или отмените ввод: /cancel.",
+            reply_markup=assignment_format_keyboard(),
+        )
+
     @router.message(
         StateFilter(
-            AssignmentCreation.title, AssignmentCreation.description, SubmissionReview.comment
+            AssignmentCreation.title,
+            AssignmentCreation.description,
+            SubmissionReview.comment,
         ),
         ~F.text,
     )

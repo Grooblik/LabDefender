@@ -17,7 +17,7 @@
   Общий `/start join_<token>` регистрирует участие студента, включая первый вход.
 - `/new_assignment` и `/submissions` работают у преподавателя, `/assignments` —
   у студента. Кнопки заданий и проверки уже подключены к карточкам групп.
-- `/new_defense_day` создаёт день защиты для задания. `/queue` работает для обеих
+- `/new_slot` создаёт слот защиты для задания. `/queue` работает для обеих
   ролей, переход студента к записи также есть в карточке допущенного задания.
 - Новая Telegram-учётка автоматически сохраняется как `student`; кнопка
   «Я преподаватель» и `/teacher` начинают проверку кода. Смена имени не сбрасывает роль.
@@ -128,7 +128,7 @@ SQLAlchemy само начинает транзакцию: не вызываем
 блокировку, затем проверяет состояние и свободные места; реализация — этап 5.
 
 Успешный `RoleFilter` проверяет только роль. Сервис обязан проверять владельца
-группы/попытки, участие в группе и принадлежность дня заданию. Существование ID
+группы/попытки, участие в группе и принадлежность слота заданию. Существование ID
 в callback, FSM или БД само по себе прав не даёт.
 
 Готовые проверки из `services/access.py`:
@@ -140,7 +140,7 @@ SQLAlchemy само начинает транзакцию: не вызываем
   владельца группы или её студента к заданию.
 - `require_submission_access(session, actor_id=..., submission_id=...)` — преподаватель
   своей группы или автор решения, который всё ещё состоит в группе.
-- `require_defense_day_access(session, actor_id=..., defense_day_id=...)` — доступ
+- `require_defense_slot_access(session, actor_id=..., slot_id=...)` — доступ
   к дню через его задание. Допуск к записи и вместимость эта проверка не проверяет.
 
 Функции возвращают разрешённую ORM-модель или выбрасывают безопасную `DomainError`.
@@ -226,53 +226,55 @@ async with immediate_transaction(session):
 предпросмотр ссылок. `PlainTextInput` различает команды по Telegram entities,
 поэтому текст решения с `//` в начале принимается как текст.
 
-## Дни защиты и очередь: готовый контракт
+## Слоты защиты и очередь: готовый контракт
 
 Ролевые обработчики — `handlers/student/defense.py`, `handlers/teacher/defense.py`,
 общий показ — `handlers/defense.py`. Callback находятся в `keyboards/defense.py`:
 `student:queue:...`, `teacher:queue:...`, `student:queue_confirm:...`,
-`teacher:day_confirm:...`. FSM `DefenseDayCreation` и `QueueChange` хранят только
+`teacher:day_confirm:...`. FSM `DefenseSlotCreation` и `QueueChange` хранят только
 черновик и снимок своей записи для подтверждения.
 
 Все операции используют общий `services/queue.py`:
 
-- `create_defense_day(session, actor_id=..., assignment_id=..., day_date=..., capacity=...)`
-  возвращает `DefenseDay`; проверяет роль преподавателя, владельца, дату по Москве
-  и положительный целый лимит. Пара «задание + дата» уникальна. Повтор тех же
-  параметров безопасен; изменение лимита существующего дня отклоняется.
+- `create_defense_slot(session, actor_id=..., assignment_id=..., day_date=...,
+  start_time=..., end_time=..., capacity=...)`
+  возвращает `DefenseSlot`; проверяет роль преподавателя, владельца, дату и время
+  по Москве, `start_time < end_time` и положительный целый лимит. Пара
+  «задание + дата + начало» уникальна, пересекающиеся слоты задания отклоняются.
+  Повтор тех же параметров безопасен; изменение лимита существующего слота отклоняется.
 - `require_approved(session, actor_id=..., assignment_id=...)` возвращает последнюю
   собственную `APPROVED`-попытку студента с `approved_at` или выбрасывает ошибку.
-- `list_defense_days(session, actor_id=..., assignment_id=..., offset=0)` возвращает
-  `Page[DayItem]`; у элемента есть `day` и `occupied`. Студенту нужны допуск и
-  участие в группе; ему показываются только сегодняшние и будущие даты.
-  Преподаватель своей группы видит и прошлые даты.
-- `get_defense_day(session, actor_id=..., defense_day_id=...)` возвращает `DayItem`
+- `list_defense_slots(session, actor_id=..., assignment_id=..., offset=0)` возвращает
+  `Page[SlotItem]`; у элемента есть `slot` и `occupied`. Студенту нужны допуск и
+  участие в группе; ему показываются только актуальные и будущие слоты.
+  Преподаватель своей группы видит и прошлые слоты.
+- `get_defense_slot(session, actor_id=..., slot_id=...)` возвращает `SlotItem`
   с проверкой доступа к заданию. Сам по себе этот метод не разрешает запись:
-  допуск и дату повторно проверяет сервис изменения очереди.
+  допуск, время и флаг `is_open` повторно проверяет сервис изменения очереди.
 - `get_student_booking(session, actor_id=..., assignment_id=...)` возвращает
-  `StudentBooking` (`entry`, `day`, `position`, `occupied`) либо `None`.
+  `StudentBooking` (`entry`, `slot`, `position`, `occupied`) либо `None`.
   Доступна только собственная запись студента.
-- `get_day_queue(session, actor_id=..., defense_day_id=..., offset=0)` возвращает
-  `DayQueue` (`day`, `occupied`, `members`). `members` — `Page[QueueMember]`,
+- `get_slot_queue(session, actor_id=..., slot_id=..., offset=0)` возвращает
+  `SlotQueue` (`slot`, `occupied`, `members`). `members` — `Page[QueueMember]`,
   элементы содержат `entry_id`, `submission_id`, `student_name`, `position`.
   Это преподавательский метод; чужие группы и студенты к списку имён не допускаются.
-- `enroll_day(session, actor_id=..., assignment_id=..., defense_day_id=...,
+- `enroll_slot(session, actor_id=..., assignment_id=..., slot_id=...,
   expected_entry_id=..., expected_order_at=...)` создаёт или перемещает одну запись
   и возвращает `QueueEntry`. Для первой записи передайте `None, None`.
-  Для смены дня — ID и UTC-время `order_at` из предыдущего `StudentBooking.entry`.
+  Для смены слота — ID и UTC-время `order_at` из предыдущего `StudentBooking.entry`.
 - `move_to_end(session, actor_id=..., assignment_id=..., expected_entry_id=...,
-  expected_order_at=...)` переносит собственную запись в конец выбранного дня
+  expected_order_at=...)` переносит собственную запись в конец выбранного слота
   и возвращает `QueueEntry`. Последняя запись остаётся без изменения порядка.
 
-`create_defense_day`, `enroll_day` и `move_to_end` сами открывают
+`create_defense_slot`, `enroll_slot` и `move_to_end` сами открывают
 `immediate_transaction`; вызывайте их до любого чтения в свежей сессии update.
-Проверки прав, актуальной попытки, прежней записи, принадлежности дня заданию,
-даты, вместимости и запись проходят под одной SQLite-блокировкой. При неудачной
-смене дня rollback сохраняет прежнее место. Повторная запись на текущий день
+Проверки прав, актуальной попытки, прежней записи, принадлежности слота заданию,
+времени, вместимости и запись проходят под одной SQLite-блокировкой. При неудачной
+смене слота rollback сохраняет прежнее место. Повторная запись в текущий слот
 возвращает существующую запись, сохраняя порядок даже при заполненном дне.
 
 Порядок один для двух интерфейсов: `(QueueEntry.order_at, QueueEntry.id)`.
-Первая запись получает `approved_at` попытки. Перенос в конец и смена дня получают
+Первая запись получает `approved_at` попытки. Перенос в конец и смена слота получают
 ключ `max(UTC now, хвост + 1 микросекунда)`, поэтому совпадение часов не ставит
 перенесённого студента перед хвостом. Позиция вычисляется оконной функцией,
 не хранится в FSM или отдельном столбце. При поздней записи ранее допущенного
@@ -286,10 +288,10 @@ commit: повтор доставки кнопки не переносит за�
 
 Календарная дата берётся через `ZoneInfo("Europe/Moscow")`; зависимость `tzdata`
 нужна для систем без IANA-базы. Серверные моменты событий остаются UTC без offset.
-Создание дня и изменения проверяют актуальную дату после получения блокировки.
-Схема таблиц на этом этапе не изменилась.
+Создание слота и изменения проверяют актуальные дату и время после получения блокировки.
+Схема таблиц обновлена: добавлены формат задания и слоты защиты.
 
-## Общая схема после этапа 5
+## Общая схема после добавления форматов и слотов
 
 Модели импортируются из `labdefender.db.models`. Таблицы создаются при запуске.
 
@@ -297,14 +299,14 @@ commit: повтор доставки кнопки не переносит за�
   `full_name`, `role`, `created_at`.
 - `StudyGroup`: `id`, `teacher_id`, `name`, уникальный случайный `invite_token`.
 - `Membership`: составной первичный ключ `(group_id, student_id)`.
-- `Assignment`: `id`, `group_id`, `title`, `description`.
+- `Assignment`: `id`, `group_id`, `title`, `description`, `format` (`online` / `in_person`).
 - `Submission`: `id`, `assignment_id`, `student_id`, `attempt_number`, `kind`,
   `status`, `content` или `file_id`, `review_comment`, `submitted_at`, `approved_at`.
   Номер попытки положителен и уникален внутри задания и студента. Возврат требует
   комментария, допуск — времени; CHECK-ограничения проверяют тип полезной нагрузки.
-- `DefenseDay`: `id`, `assignment_id`, `date`, положительный `capacity`;
-  пара `(assignment_id, date)` уникальна.
-- `QueueEntry`: `id`, `defense_day_id`, уникальный `submission_id`, `order_at`.
+- `DefenseSlot`: `id`, `assignment_id`, `date`, `start_time`, `end_time`,
+  положительный `capacity`, `is_open`; уникальна тройка `(assignment_id, date, start_time)`.
+- `QueueEntry`: `id`, `slot_id`, уникальный `submission_id`, `order_at`.
 - `TeacherRegistrationAttempt`: `user_id` как PK/FK, `failed_attempts`,
   `window_started_at`. Хранит только счётчик и начало окна, не код.
 
@@ -315,7 +317,7 @@ Python используем `datetime.now(UTC).replace(tzinfo=None)`, для п�
 UTC в `Europe/Moscow`.
 
 **Что схема сама не гарантирует:** роль владельца группы, членство автора решения,
-переходы статусов, единственную актуальную попытку, соответствие задания у дня
+переходы статусов, единственную актуальную попытку, соответствие задания у слота
 и попытки, вместимость и одну активную запись студента на задание. Это обязательные
 проверки общих сервисов в транзакции, а не уже готовые возможности каркаса.
 
@@ -327,8 +329,8 @@ erDiagram
     StudyGroup ||--o{ Assignment : contains
     User ||--o{ Submission : sends
     Assignment ||--o{ Submission : receives
-    Assignment ||--o{ DefenseDay : schedules
-    DefenseDay ||--o{ QueueEntry : contains
+    Assignment ||--o{ DefenseSlot : schedules
+    DefenseSlot ||--o{ QueueEntry : contains
     Submission ||--o| QueueEntry : enrolls
 ```
 
@@ -340,8 +342,8 @@ erDiagram
 возвращают `True` при смене роли, `False`, если она уже выдана, либо доменную ошибку.
 Они принимают внутренний `actor_id`; `grant_teacher` дополнительно получает
 `target_telegram_id` и `admin_ids` из настроек. Также готовы `services.groups`,
-`services.queue` и описанные выше ролевые обработчики. Следующий core-этап —
-подготовка запуска, резервирования и ручная проверка настоящего Telegram.
+`services.queue` и описанные выше ролевые обработчики. Локальный запуск,
+резервирование, backup/restore и команда `migrate` также готовы.
 
 Все функции получают `session` и ID действующего пользователя; идентификаторы
 объектов передаём явно. Сервисы не зависят от `Message`, `CallbackQuery` и FSM.

@@ -1,15 +1,15 @@
 import asyncio
-from datetime import timedelta
+from datetime import time, timedelta
 from pathlib import Path
 
 from sqlalchemy.engine import URL
 
 from labdefender.db.session import create_database, initialize_database
-from labdefender.enums import Role, SubmissionStatus
+from labdefender.enums import AssignmentFormat, Role, SubmissionStatus
 from labdefender.local import LocalOperationError, check_database, database_lock, reserve_database
 from labdefender.services.assignments import create_assignment
 from labdefender.services.groups import create_group, join_group
-from labdefender.services.queue import create_defense_day, enroll_day, today_moscow
+from labdefender.services.queue import create_defense_slot, enroll_slot, today_moscow
 from labdefender.services.submissions import review_submission, submit_solution, text_solution
 from labdefender.services.users import ensure_user
 
@@ -48,7 +48,12 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
                 await session.commit()
             group = await call(create_group, actor_id=teacher.id, name="Демо · ИВТ-101")
             assignments = []
-            for title in ("ЛР 1 · готовая очередь", "ЛР 2 · на проверке", "ЛР 3 · пересдача"):
+            assignment_formats = (
+                ("ЛР 1 · готовая очередь", AssignmentFormat.IN_PERSON),
+                ("ЛР 2 · на проверке", AssignmentFormat.ONLINE),
+                ("ЛР 3 · пересдача", AssignmentFormat.ONLINE),
+            )
+            for title, assignment_format in assignment_formats:
                 assignments.append(
                     await call(
                         create_assignment,
@@ -56,20 +61,34 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
                         group_id=group.id,
                         title=title,
                         description="Реализуйте решение, объясните алгоритм и оцените сложность.",
+                        format=assignment_format,
                     )
                 )
-            day = await call(
-                create_defense_day,
+            first_slot = await call(
+                create_defense_slot,
                 actor_id=teacher.id,
                 assignment_id=assignments[0].id,
                 day_date=today_moscow() + timedelta(days=1),
+                start_time=time(14, 0),
+                end_time=time(16, 0),
                 capacity=max(2, len(student_ids)),
             )
             await call(
-                create_defense_day,
+                create_defense_slot,
+                actor_id=teacher.id,
+                assignment_id=assignments[0].id,
+                day_date=today_moscow() + timedelta(days=1),
+                start_time=time(16, 0),
+                end_time=time(18, 0),
+                capacity=1,
+            )
+            await call(
+                create_defense_slot,
                 actor_id=teacher.id,
                 assignment_id=assignments[0].id,
                 day_date=today_moscow() + timedelta(days=2),
+                start_time=time(10, 0),
+                end_time=time(12, 0),
                 capacity=1,
             )
             for index, telegram_id in enumerate(student_ids):
@@ -94,10 +113,10 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
                     decision=SubmissionStatus.APPROVED,
                 )
                 await call(
-                    enroll_day,
+                    enroll_slot,
                     actor_id=student.id,
                     assignment_id=assignments[0].id,
-                    defense_day_id=day.id,
+                    slot_id=first_slot.id,
                     expected_entry_id=None,
                     expected_order_at=None,
                 )
@@ -135,6 +154,6 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
             "student_ids": list(student_ids),
             "group_id": group.id,
             "assignment_ids": [item.id for item in assignments],
-            "day_id": day.id,
+            "slot_ids": [first_slot.id],
             "invite_payload": f"join_{group.invite_token}",
         }

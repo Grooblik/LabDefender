@@ -9,7 +9,16 @@ from labdefender.keyboards.coursework import selection_keyboard
 class TeacherQueueCallback(CallbackData, prefix="teacher"):
     section: Literal["queue"] = "queue"
     action: Literal[
-        "groups_new", "groups_view", "assignments_new", "assignments_view", "new", "days", "open"
+        "groups_new",
+        "groups_view",
+        "assignments_new",
+        "assignments_view",
+        "new",
+        "days",
+        "open",
+        "close",
+        "reopen",
+        "cancel",
     ]
     object_id: int = Field(ge=0, le=2**63 - 1)
     offset: int = Field(default=0, ge=0, le=2**31 - 1)

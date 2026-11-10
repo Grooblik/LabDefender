@@ -1,7 +1,7 @@
 from labdefender.db.models.auth import TeacherRegistrationAttempt
 from labdefender.db.models.domain import (
     Assignment,
-    DefenseDay,
+    DefenseSlot,
     Membership,
     QueueEntry,
     StudyGroup,
@@ -11,7 +11,7 @@ from labdefender.db.models.user import User
 
 __all__ = [
     "Assignment",
-    "DefenseDay",
+    "DefenseSlot",
     "Membership",
     "QueueEntry",
     "StudyGroup",

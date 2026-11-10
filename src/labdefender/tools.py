@@ -25,6 +25,7 @@ from labdefender.local import (
     database_path,
     restore_database,
 )
+from labdefender.migrations import database_schema_state, migrate_database
 from labdefender.services.queue import get_student_booking
 
 
@@ -54,10 +55,19 @@ def doctor(*, online: bool = False) -> None:
     print(f"OK: Python {sys.version.split()[0]}, SQLite {sqlite3.sqlite_version}.")
     print("OK: настройки прочитаны; секретные значения скрыты.")
     if path.exists():
-        missing = check_database(path, allow_missing_tables=True)
-        print("OK: целостность, связи и столбцы существующих таблиц SQLite.")
-        if missing:
-            print(f"INFO: при запуске будут созданы таблицы: {', '.join(missing)}.")
+        state = database_schema_state(path)
+        if state == "legacy":
+            print(
+                "INFO: найдена старая схема. Выполните "
+                "`python -m labdefender.tools migrate`, чтобы сохранить данные."
+            )
+        elif state == "partial":
+            print("WARN: схема базы частично мигрирована или неизвестна. Проверьте копию.")
+        else:
+            missing = check_database(path, allow_missing_tables=True)
+            print("OK: целостность, связи и столбцы существующих таблиц SQLite.")
+            if missing:
+                print(f"INFO: при запуске будут созданы таблицы: {', '.join(missing)}.")
     else:
         print("INFO: база ещё не создана; она появится при первом запуске.")
     print(f"База: {path}")
@@ -123,6 +133,10 @@ def parser() -> argparse.ArgumentParser:
     restore = commands.add_parser("restore", help="Восстановить копию в новый файл")
     restore.add_argument("source", type=Path)
     restore.add_argument("--output", type=Path, required=True)
+    migrate = commands.add_parser(
+        "migrate", help="Мигрировать старую базу к форматам заданий и слотам"
+    )
+    migrate.add_argument("--database", type=Path, help="SQLite-файл; по умолчанию из .env")
     seed = commands.add_parser("seed-demo", help="Создать отдельную новую демобазу")
     seed.add_argument("--output", type=Path, default=Path("data/demo.sqlite3"))
     seed.add_argument("--teacher-id", type=int, required=True)
@@ -153,6 +167,14 @@ def main() -> None:
                 "Демобаза создана отдельно. Для Telegram используйте реальные ID "
                 "и выберите этот файл в DATABASE_URL."
             )
+        elif args.command == "migrate":
+            source = args.database or database_path(DatabaseSettings().database_url)
+            migrated, backup = migrate_database(source)
+            print(f"Миграция завершена: {migrated}")
+            if backup is not None:
+                print(f"Резервная копия: {backup}")
+            else:
+                print("INFO: миграция не требуется.")
         elif args.command == "backup":
             source = args.database or database_path(DatabaseSettings().database_url)
             destination = args.output or Path("backups") / datetime.now(UTC).strftime(
