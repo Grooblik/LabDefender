@@ -5,6 +5,41 @@ class DomainError(Exception):
     """Expected business error with a message safe to show to the user."""
 
 
+class InvalidAssignment(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Нужно название от 1 до 256 символов и условие до 4000 символов.")
+
+
+class InvalidSolution(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Отправьте один PDF или ZIP до 20 МиБ с известным размером, "
+            "текст до 4096 символов или ссылку HTTP(S)."
+        )
+
+
+class SubmissionConflict(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Попытка уже отправлена, проверена или устарела. Откройте задание заново.")
+
+
+class InvalidReviewComment(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Для возврата нужен комментарий от 1 до 4000 символов. Введите его заново."
+        )
+
+
+class StaleCourseAction(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Кнопка устарела. Откройте раздел заново через /help.")
+
+
+class SolutionDeliveryUnavailable(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Не удалось показать файл. Попробуйте открыть попытку ещё раз.")
+
+
 class AccessDenied(DomainError):
     def __init__(self) -> None:
         super().__init__("Недостаточно прав для этого действия.")

@@ -5,6 +5,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pydantic import Field
 
 from labdefender.enums import Role
+from labdefender.keyboards.coursework import StudentCourseCallback, TeacherCourseCallback
 from labdefender.services.groups import GROUP_PAGE_SIZE, GroupPage
 
 
@@ -70,6 +71,22 @@ def teacher_group_keyboard(group_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text="Новое задание",
+                    callback_data=TeacherCourseCallback(
+                        action="publish", object_id=group_id
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Проверить решения",
+                    callback_data=TeacherCourseCallback(
+                        action="review_list", object_id=group_id
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="Ссылка-приглашение",
                     callback_data=TeacherGroupCallback(action="invite", value=group_id).pack(),
                 )
@@ -80,6 +97,19 @@ def teacher_group_keyboard(group_id: int) -> InlineKeyboardMarkup:
                     callback_data=TeacherGroupCallback(action="list", value=0).pack(),
                 )
             ],
+        ]
+    )
+
+
+def student_assignments_keyboard(group_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Задания группы",
+                    callback_data=StudentCourseCallback(action="list", object_id=group_id).pack(),
+                )
+            ]
         ]
     )
 

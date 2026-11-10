@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
 from labdefender.enums import Role
-from labdefender.keyboards.groups import StudentGroupCallback, group_list_keyboard
+from labdefender.keyboards.groups import (
+    StudentGroupCallback,
+    group_list_keyboard,
+    student_assignments_keyboard,
+)
 from labdefender.services.groups import get_group, list_groups
 
 
@@ -48,7 +52,8 @@ def create_router() -> Router:
         else:
             group = await get_group(session, actor_id=current_user.id, group_id=callback_data.value)
             await callback.message.answer(
-                f"Группа «{group.name}»\nВы состоите в этой группе.\nВаши группы: /my_groups"
+                f"Группа «{group.name}»\nВы состоите в этой группе.\nВаши группы: /my_groups",
+                reply_markup=student_assignments_keyboard(group.id),
             )
         await callback.answer()
 

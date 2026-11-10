@@ -66,6 +66,7 @@ async def run(settings: Settings) -> None:
                     BotCommand(command="cancel", description="Отменить ввод"),
                     BotCommand(command="teacher", description="Доступ преподавателя"),
                     BotCommand(command="my_groups", description="Мои группы"),
+                    BotCommand(command="assignments", description="Задания студента"),
                 ]
             )
             logger.info("Starting polling")

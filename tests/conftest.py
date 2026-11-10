@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, GetMe, SendMessage
-from aiogram.types import Chat, Message, User
+from aiogram.methods import AnswerCallbackQuery, DeleteMessage, GetMe, SendDocument, SendMessage
+from aiogram.types import Chat, Document, Message, User
 
 from labdefender.db.session import create_database, initialize_database
 
@@ -30,6 +30,16 @@ class RecordingSession(BaseSession):
                 date=datetime.now(UTC),
                 chat=Chat(id=int(method.chat_id), type="private"),
                 text=method.text,
+            )
+        if isinstance(method, SendDocument):
+            assert isinstance(method.document, str), (
+                "Only existing Telegram file_id values are sent"
+            )
+            return Message(
+                message_id=len(self.calls),
+                date=datetime.now(UTC),
+                chat=Chat(id=int(method.chat_id), type="private"),
+                document=Document(file_id=method.document, file_unique_id="unique-document"),
             )
         if isinstance(method, (AnswerCallbackQuery, DeleteMessage)):
             return True

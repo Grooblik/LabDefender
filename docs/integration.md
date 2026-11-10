@@ -15,6 +15,8 @@
 - `RoleFilter` подключён к `message` и `callback_query` каждого ролевого роутера.
 - `/my_groups` работает для обеих ролей; `/create_group` и `/invite` — у преподавателя.
   Общий `/start join_<token>` регистрирует участие студента, включая первый вход.
+- `/new_assignment` и `/submissions` работают у преподавателя, `/assignments` —
+  у студента. Кнопки заданий и проверки уже подключены к карточкам групп.
 - Новая Telegram-учётка автоматически сохраняется как `student`; кнопка
   «Я преподаватель» и `/teacher` начинают проверку кода. Смена имени не сбрасывает роль.
 - `TEACHER_REGISTRATION_CODE` задаётся в `.env`, `ADMIN_IDS` — JSON-массив Telegram ID.
@@ -163,7 +165,66 @@ async with immediate_transaction(session):
 в диалогах сериализованы `SimpleEventIsolation`; лимит попыток дополнительно
 защищён SQLite-блокировкой и работает между отдельными сессиями.
 
-## Общая схема после этапа 3
+## Задания и попытки: готовый контракт
+
+Обработчики находятся в `handlers/student/coursework.py` и
+`handlers/teacher/coursework.py`. Общий показ карточек и длинного текста —
+`handlers/coursework.py`, кнопки — `keyboards/coursework.py`. Зарезервированы callback
+`student:course:...`, `teacher:course:...`, `student:submit:...`, `teacher:publish:...`
+и FSM `AssignmentCreation`, `SolutionSubmission`, `SubmissionReview`.
+Не регистрируйте эти команды и callback повторно в других роутерах.
+
+Из `services/assignments.py` доступны:
+
+- `create_assignment(session, actor_id=..., group_id=..., title=..., description=...)`
+  возвращает `Assignment`. Проверяет владельца, название и условие, сохраняет публикацию.
+- `get_assignment(session, actor_id=..., assignment_id=...)` возвращает разрешённый объект.
+- `list_assignments(session, actor_id=..., group_id=..., offset=0)` возвращает `Page[Assignment]`.
+
+Из `services/submissions.py` доступны:
+
+- `text_solution(text)` и `document_solution(file_id=..., file_name=..., file_size=...,
+  mime_type=...)` возвращают проверенный `Solution`. Данные файла берём из Telegram;
+  неизвестный размер, лишний тип, противоречивый MIME или превышение 20 МиБ отклоняются.
+- `submit_solution(session, actor_id=..., assignment_id=..., expected_previous_id=...,
+  solution=...)` возвращает сохранённую `Submission`. `expected_previous_id` — ID
+  последней попытки на момент начала диалога, либо `None`, если её ещё не было.
+  Сервис заново проверяет payload, членство, последнюю попытку и её статус под
+  одной SQLite-блокировкой. При изменении предыдущей попытки черновик считается устаревшим.
+- `latest_submission(session, actor_id=..., assignment_id=...)` возвращает последнюю
+  собственную попытку студента или `None`.
+- `get_submission(session, actor_id=..., submission_id=...)` возвращает
+  `SubmissionDetail` с полями `submission`, `student`, `assignment`, `group`.
+  Проверяет доступ **до** выдачи содержимого. Студент из той же группы не видит чужую работу.
+- `list_submissions(session, actor_id=..., assignment_id=..., offset=0)` возвращает
+  `Page[SubmissionItem]`. Элемент содержит `submission` и `student_name`.
+  Для преподавателя это все попытки задания его группы, для студента — только собственные.
+  Сортировка — от новых к старым, история возвратов сохраняется.
+- `require_reviewable(session, actor_id=..., submission_id=...)` проверяет право
+  преподавателя и актуальное `pending`-состояние перед началом диалога комментария.
+- `review_submission(session, actor_id=..., submission_id=..., decision=...,
+  comment=None)` возвращает `Submission`. Разрешены только `APPROVED` и `RETURNED`.
+  Возврат требует комментарий. При допуске сохраняется UTC-время `approved_at`.
+
+`create_assignment`, `submit_solution`, `review_submission` сами открывают
+`immediate_transaction` и коммитят изменения. Вызывайте их в новой сессии update
+до запросов чтения и не оборачивайте во внешнюю транзакцию. Методы чтения и
+`require_reviewable` не коммитят. Проверку, выполненную при начале диалога, сервис
+записи повторяет: это защищает от устаревших кнопок и гонок.
+
+Повторная сдача допускается только после `RETURNED`; новая попытка получает следующий
+номер. При `PENDING` или `APPROVED` отправка отклоняется. Переходы проверки возможны
+только у последней `PENDING`-попытки. Повторное решение вызывает `SubmissionConflict`,
+не меняет комментарий и время допуска. Ошибки домена обрабатываются общим middleware.
+
+`Page` содержит `items`, `offset`, `has_next`; общий размер страницы — 8.
+Файловые метаданные используются для проверки и предпросмотра в FSM, в таблице
+попытки сохраняется только `file_id`. Для текста и ссылки сохраняется `content`.
+`send_text` делит длинные сообщения по UTF-16 без потери содержимого и отключает
+предпросмотр ссылок. `PlainTextInput` различает команды по Telegram entities,
+поэтому текст решения с `//` в начале принимается как текст.
+
+## Общая схема после этапа 4
 
 Модели импортируются из `labdefender.db.models`. Таблицы создаются при запуске.
 
@@ -209,16 +270,14 @@ erDiagram
 ## Разделение следующих сервисов
 
 Уже реализованы `services.users.ensure_user`, `services.auth.register_teacher`,
-`services.auth.grant_teacher` и проверки `services.access`. Функции регистрации
+`services.auth.grant_teacher`, проверки `services.access`, сервисы заданий
+и попыток. Функции регистрации
 возвращают `True` при смене роли, `False`, если она уже выдана, либо доменную ошибку.
 Они принимают внутренний `actor_id`; `grant_teacher` дополнительно получает
 `target_telegram_id` и `admin_ids` из настроек. Также готовы `services.groups`
 и описанные выше групповые обработчики. Остальные сервисы ниже ещё предстоит
 реализовать — не импортируйте будущие функции до их появления.
 
-- Задания: `services/assignments.py` — публикация и чтение разрешённых заданий.
-- Попытки: `services/submissions.py` — сдача, чтение, допуск и возврат;
-  один файл обслуживает оба интерфейса.
 - Ядро очереди: `services/queue.py` — создание дня, запись, позиция, список,
   перенос в конец, смена дня. Порядок один для обоих интерфейсов.
 

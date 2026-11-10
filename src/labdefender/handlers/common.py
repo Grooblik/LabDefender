@@ -44,9 +44,10 @@ def create_router() -> Router:
     @router.message(Command("help"))
     async def help_command(message: Message, current_user: User, admin_ids: frozenset[int]) -> None:
         teacher_help = (
-            "\n/teacher — получить доступ преподавателя"
+            "\n/teacher — получить доступ преподавателя\n/assignments — задания и статусы"
             if current_user.role == Role.STUDENT
             else "\n/create_group — создать группу\n/invite — пригласить студентов"
+            "\n/new_assignment — опубликовать задание\n/submissions — проверить решения"
         )
         admin_help = (
             "\n/grant_teacher <telegram_id> — выдать роль преподавателя"
