@@ -1,8 +1,10 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
-class DefenseDayCreation(StatesGroup):
+class DefenseSlotCreation(StatesGroup):
     date = State()
+    start_time = State()
+    end_time = State()
     capacity = State()
     confirmation = State()
 

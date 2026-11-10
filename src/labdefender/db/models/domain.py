@@ -1,7 +1,8 @@
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -9,13 +10,14 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from labdefender.db.base import Base
-from labdefender.enums import SubmissionKind, SubmissionStatus
+from labdefender.enums import AssignmentFormat, SubmissionKind, SubmissionStatus
 
 
 class StudyGroup(Base):
@@ -43,6 +45,15 @@ class Assignment(Base):
     group_id: Mapped[int] = mapped_column(ForeignKey("study_groups.id"), index=True)
     title: Mapped[str] = mapped_column(String(256))
     description: Mapped[str] = mapped_column(Text)
+    format: Mapped[AssignmentFormat] = mapped_column(
+        Enum(
+            AssignmentFormat,
+            values_callable=lambda formats: [item.value for item in formats],
+            native_enum=False,
+            create_constraint=True,
+            name="assignment_format",
+        )
+    )
 
 
 class Submission(Base):
@@ -96,24 +107,28 @@ class Submission(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class DefenseDay(Base):
-    __tablename__ = "defense_days"
+class DefenseSlot(Base):
+    __tablename__ = "defense_slots"
     __table_args__ = (
-        UniqueConstraint("assignment_id", "date"),
+        UniqueConstraint("assignment_id", "date", "start_time"),
+        CheckConstraint("start_time < end_time", name="valid_time_range"),
         CheckConstraint("capacity > 0", name="positive_capacity"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id"), index=True)
     date: Mapped[date] = mapped_column(Date)
+    start_time: Mapped[time] = mapped_column(Time)
+    end_time: Mapped[time] = mapped_column(Time)
     capacity: Mapped[int]
+    is_open: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
 
 class QueueEntry(Base):
     __tablename__ = "queue_entries"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    defense_day_id: Mapped[int] = mapped_column(ForeignKey("defense_days.id"), index=True)
+    slot_id: Mapped[int] = mapped_column(ForeignKey("defense_slots.id"), index=True)
     submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id"), unique=True)
     # Initial value = submission.approved_at; moving to the end sets this to now (UTC).
     order_at: Mapped[datetime] = mapped_column(DateTime)

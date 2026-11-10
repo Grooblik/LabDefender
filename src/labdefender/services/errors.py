@@ -5,18 +5,23 @@ class DomainError(Exception):
     """Expected business error with a message safe to show to the user."""
 
 
-class InvalidDefenseDay(DomainError):
+class InvalidDefenseSlot(DomainError):
     def __init__(self) -> None:
         super().__init__(
-            "Укажите дату YYYY-MM-DD не раньше сегодняшней по Москве и положительный лимит мест."
+            "Укажите дату YYYY-MM-DD, время HH:MM, конец позже начала и положительный лимит мест."
         )
 
 
-class DefenseDayExists(DomainError):
+class DefenseSlotExists(DomainError):
     def __init__(self) -> None:
         super().__init__(
-            "На эту дату у задания уже есть день защиты с другим лимитом. Откройте /queue."
+            "На это время у задания уже есть слот защиты. Откройте /queue и проверьте расписание."
         )
+
+
+class DefenseSlotOverlap(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Этот слот пересекается с другим слотом задания. Выберите другое время.")
 
 
 class ApprovalRequired(DomainError):
@@ -26,14 +31,27 @@ class ApprovalRequired(DomainError):
         )
 
 
-class DefenseDayClosed(DomainError):
+class DefenseSlotClosed(DomainError):
     def __init__(self) -> None:
-        super().__init__("Эта дата уже прошла. Выберите другой день защиты.")
+        super().__init__("Этот слот уже прошёл или закрыт. Выберите другой слот защиты.")
 
 
-class DefenseDayFull(DomainError):
+class DefenseSlotFull(DomainError):
     def __init__(self) -> None:
-        super().__init__("На выбранный день мест нет. Прежняя запись сохранена, если она была.")
+        super().__init__("На выбранный слот мест нет. Прежняя запись сохранена, если она была.")
+
+
+class DefenseSlotNotEmpty(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Нельзя отменить слот, в котором уже есть записи. "
+            "Сначала закройте его для новых записей."
+        )
+
+
+class InvalidAssignmentFormat(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Выберите формат сдачи: очная или онлайн.")
 
 
 class QueueChanged(DomainError):

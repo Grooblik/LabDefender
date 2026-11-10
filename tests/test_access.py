@@ -1,19 +1,19 @@
-from datetime import date
+from datetime import date, time
 
 import pytest
 
 from labdefender.db.models import (
     Assignment,
-    DefenseDay,
+    DefenseSlot,
     Membership,
     StudyGroup,
     Submission,
     User,
 )
-from labdefender.enums import Role, SubmissionKind
+from labdefender.enums import AssignmentFormat, Role, SubmissionKind
 from labdefender.services.access import (
     require_assignment_access,
-    require_defense_day_access,
+    require_defense_slot_access,
     require_group_member,
     require_group_owner,
     require_submission_access,
@@ -43,7 +43,12 @@ async def context(database):
                 Membership(group_id=group.id, student_id=users[3].id),
             ]
         )
-        assignment = Assignment(group_id=group.id, title="Lab", description="Task")
+        assignment = Assignment(
+            group_id=group.id,
+            title="Lab",
+            description="Task",
+            format=AssignmentFormat.ONLINE,
+        )
         session.add(assignment)
         await session.flush()
         submission = Submission(
@@ -53,7 +58,13 @@ async def context(database):
             kind=SubmissionKind.TEXT,
             content="Private solution",
         )
-        day = DefenseDay(assignment_id=assignment.id, date=date(2026, 11, 13), capacity=1)
+        day = DefenseSlot(
+            assignment_id=assignment.id,
+            date=date(2026, 11, 13),
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+            capacity=1,
+        )
         session.add_all([submission, day])
         await session.commit()
         return sessions, {
@@ -96,7 +107,7 @@ async def test_membership_is_required_for_student_access(context, actor):
 
 
 @pytest.mark.parametrize("actor", ["teacher", "student", "other_teacher", "outsider"])
-async def test_assignment_and_defense_day_follow_group_access(context, actor):
+async def test_assignment_and_defense_slot_follow_group_access(context, actor):
     sessions, ids = context
     async with sessions() as session:
         if actor in {"teacher", "student"}:
@@ -106,9 +117,7 @@ async def test_assignment_and_defense_day_follow_group_access(context, actor):
                 )
             ).id == ids["assignment"]
             assert (
-                await require_defense_day_access(
-                    session, actor_id=ids[actor], defense_day_id=ids["day"]
-                )
+                await require_defense_slot_access(session, actor_id=ids[actor], slot_id=ids["day"])
             ).id == ids["day"]
         else:
             with pytest.raises(DomainError):
@@ -116,9 +125,7 @@ async def test_assignment_and_defense_day_follow_group_access(context, actor):
                     session, actor_id=ids[actor], assignment_id=ids["assignment"]
                 )
             with pytest.raises(DomainError):
-                await require_defense_day_access(
-                    session, actor_id=ids[actor], defense_day_id=ids["day"]
-                )
+                await require_defense_slot_access(session, actor_id=ids[actor], slot_id=ids["day"])
 
 
 @pytest.mark.parametrize("actor", ["teacher", "student", "classmate", "other_teacher", "outsider"])

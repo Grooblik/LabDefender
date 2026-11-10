@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from labdefender.app import create_dispatcher
 from labdefender.db.models import Assignment, Membership, Submission
 from labdefender.db.session import create_database, initialize_database
-from labdefender.enums import Role, SubmissionStatus
+from labdefender.enums import AssignmentFormat, Role, SubmissionStatus
 from labdefender.keyboards.coursework import (
     StudentCourseCallback,
     StudentDraftCallback,
@@ -128,7 +128,12 @@ async def course(database):
         await session.commit()
     async with sessions() as session:
         assignment = await create_assignment(
-            session, actor_id=ids[101], group_id=group.id, title="ЛР 1", description="Условие"
+            session,
+            actor_id=ids[101],
+            group_id=group.id,
+            title="ЛР 1",
+            description="Условие",
+            format=AssignmentFormat.ONLINE,
         )
     async with sessions() as session:
         other_assignment = await create_assignment(
@@ -137,6 +142,7 @@ async def course(database):
             group_id=other_group.id,
             title="Private lab",
             description="Private task",
+            format=AssignmentFormat.ONLINE,
         )
     return sessions, ids, group, assignment, other_assignment
 
@@ -223,6 +229,7 @@ async def test_permissions_protect_assignments_and_solution_contents(course):
                     group_id=group.id,
                     title="Forged",
                     description="Forged",
+                    format=AssignmentFormat.ONLINE,
                 )
     for actor in (203, 303, 404):
         async with sessions() as session:
@@ -363,7 +370,12 @@ async def test_invalid_assignment_is_not_published(course, title, description):
     async with sessions() as session:
         with pytest.raises(InvalidAssignment):
             await create_assignment(
-                session, actor_id=ids[101], group_id=group.id, title=title, description=description
+                session,
+                actor_id=ids[101],
+                group_id=group.id,
+                title=title,
+                description=description,
+                format=AssignmentFormat.ONLINE,
             )
 
 
@@ -407,6 +419,7 @@ async def test_full_bot_flow_publish_return_resubmit_file_approve(course, bot):
     dispatcher = create_dispatcher(sessions)
     await dispatcher.feed_update(bot, message_update("/new_assignment"))
     await press(dispatcher, bot, first_button(bot))
+    await press(dispatcher, bot, first_button(bot))
     await dispatcher.feed_update(bot, message_update("ЛР из диалога"))
     await dispatcher.feed_update(bot, message_update("Условие из диалога"))
     confirmation = first_button(bot)
@@ -418,12 +431,14 @@ async def test_full_bot_flow_publish_return_resubmit_file_approve(course, bot):
             select(Assignment).where(Assignment.title == "ЛР из диалога")
         )
         assert assignment.group_id == group.id
+        assert assignment.format == AssignmentFormat.IN_PERSON
         assignment_id = assignment.id
     await dispatcher.feed_update(bot, message_update("/assignments", user_id=202))
     await press(dispatcher, bot, first_button(bot), user=202)
     await press(
         dispatcher, bot, StudentCourseCallback(action="open", object_id=assignment_id), user=202
     )
+    assert "Формат сдачи: очная" in messages(bot)[-2].text + messages(bot)[-1].text
     assert "Не отправлено" in messages(bot)[-1].text
     confirmation = await prepare_solution(dispatcher, bot, assignment_id)
     await press(dispatcher, bot, confirmation, user=202)
@@ -559,7 +574,12 @@ async def test_long_unicode_solution_and_description_are_not_truncated(course, b
     description = "😀" * 2000
     async with sessions() as session:
         assignment = await create_assignment(
-            session, actor_id=ids[101], group_id=group.id, title="a" * 256, description=description
+            session,
+            actor_id=ids[101],
+            group_id=group.id,
+            title="a" * 256,
+            description=description,
+            format=AssignmentFormat.ONLINE,
         )
     dispatcher = create_dispatcher(sessions)
     await press(

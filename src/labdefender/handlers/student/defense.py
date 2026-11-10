@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from labdefender.db.models import User
 from labdefender.handlers.coursework import require_draft
 from labdefender.handlers.defense import (
-    show_defense_days,
+    show_defense_slots,
     show_queue_assignments,
     show_queue_groups,
     show_student_booking,
+    slot_time_label,
 )
 from labdefender.keyboards.defense import (
     StudentQueueCallback,
@@ -22,17 +23,18 @@ from labdefender.keyboards.defense import (
 )
 from labdefender.services import queue as queue_service
 from labdefender.services.errors import (
-    DefenseDayClosed,
-    DefenseDayFull,
+    DefenseSlotClosed,
+    DefenseSlotFull,
     QueueChanged,
     StaleCourseAction,
 )
 from labdefender.services.queue import (
-    enroll_day,
-    get_defense_day,
+    enroll_slot,
+    get_defense_slot,
     get_student_booking,
     move_to_end,
     require_approved,
+    slot_end_at,
 )
 from labdefender.states.defense import QueueChange
 
@@ -70,7 +72,7 @@ def create_router() -> Router:
                 callback.message, session, current_user, group_id=object_id, offset=offset
             )
         elif action == "days":
-            await show_defense_days(
+            await show_defense_slots(
                 callback.message, session, current_user, assignment_id=object_id, offset=offset
             )
         elif action == "status":
@@ -79,32 +81,33 @@ def create_router() -> Router:
             )
         else:
             if action == "choose":
-                info = await get_defense_day(
-                    session, actor_id=current_user.id, defense_day_id=object_id
-                )
-                day = info.day
-                assignment_id = day.assignment_id
+                info = await get_defense_slot(session, actor_id=current_user.id, slot_id=object_id)
+                slot = info.slot
+                assignment_id = slot.assignment_id
                 await require_approved(
                     session, actor_id=current_user.id, assignment_id=assignment_id
                 )
                 booking = await get_student_booking(
                     session, actor_id=current_user.id, assignment_id=assignment_id
                 )
-                if day.date < queue_service.today_moscow():
-                    raise DefenseDayClosed()
-                if booking and booking.day.id == day.id:
+                if booking and booking.slot.id == slot.id:
                     await show_student_booking(
                         callback.message, session, current_user, assignment_id=assignment_id
                     )
                     await callback.answer()
                     return
-                if info.occupied >= day.capacity:
-                    raise DefenseDayFull()
+                if (
+                    not slot.is_open
+                    or slot_end_at(slot.date, slot.end_time) <= queue_service.now_moscow()
+                ):
+                    raise DefenseSlotClosed()
+                if info.occupied >= slot.capacity:
+                    raise DefenseSlotFull()
                 operation = "enroll"
-                label = "Сменить день" if booking else "Записаться"
-                description = f"{label} на {day.date:%d.%m.%Y} (Москва)?"
+                label = "Сменить слот" if booking else "Записаться"
+                description = f"{label} на {slot.date:%d.%m.%Y} · {slot_time_label(slot)} (Москва)?"
                 if booking:
-                    description += "\nНа новом дне вы попадёте в конец очереди."
+                    description += "\nВ новом слоте вы попадёте в конец очереди."
             else:
                 assignment_id = object_id
                 await require_approved(
@@ -115,17 +118,23 @@ def create_router() -> Router:
                 )
                 if booking is None:
                     raise QueueChanged()
-                day = booking.day
-                if day.date < queue_service.today_moscow():
-                    raise DefenseDayClosed()
+                slot = booking.slot
+                if (
+                    not slot.is_open
+                    or slot_end_at(slot.date, slot.end_time) <= queue_service.now_moscow()
+                ):
+                    raise DefenseSlotClosed()
                 operation = "move"
-                description = f"Перенести вашу запись на {day.date:%d.%m.%Y} в конец очереди?"
+                description = (
+                    "Перенести вашу запись на "
+                    f"{slot.date:%d.%m.%Y} · {slot_time_label(slot)} в конец очереди?"
+                )
             nonce = secrets.token_hex(8)
             await state.set_data(
                 {
                     "operation": operation,
                     "assignment_id": assignment_id,
-                    "day_id": day.id,
+                    "slot_id": slot.id,
                     "entry_id": booking.entry.id if booking else None,
                     "order_at": booking.entry.order_at.isoformat() if booking else None,
                     "nonce": nonce,
@@ -158,11 +167,11 @@ def create_router() -> Router:
         else:
             expected_order = datetime.fromisoformat(data["order_at"]) if data["order_at"] else None
             if data["operation"] == "enroll":
-                await enroll_day(
+                await enroll_slot(
                     session,
                     actor_id=current_user.id,
                     assignment_id=data["assignment_id"],
-                    defense_day_id=data["day_id"],
+                    slot_id=data["slot_id"],
                     expected_entry_id=data["entry_id"],
                     expected_order_at=expected_order,
                 )

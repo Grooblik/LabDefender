@@ -48,7 +48,7 @@ def create_router() -> Router:
             if current_user.role == Role.STUDENT
             else "\n/create_group — создать группу\n/invite — пригласить студентов"
             "\n/new_assignment — опубликовать задание\n/submissions — проверить решения"
-            "\n/new_defense_day — открыть день защиты"
+            "\n/new_slot — открыть слот защиты"
         )
         admin_help = (
             "\n/grant_teacher <telegram_id> — выдать роль преподавателя"

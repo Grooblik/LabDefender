@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AssignmentCreation(StatesGroup):
+    format = State()
     title = State()
     description = State()
     confirmation = State()

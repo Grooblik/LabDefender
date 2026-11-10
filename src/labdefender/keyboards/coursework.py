@@ -28,6 +28,11 @@ class StudentCourseCallback(CallbackData, prefix="student"):
     offset: int = Field(default=0, ge=0, le=2**31 - 1)
 
 
+class AssignmentFormatCallback(CallbackData, prefix="teacher"):
+    section: Literal["assignment_format"] = "assignment_format"
+    action: Literal["online", "in_person", "cancel"]
+
+
 class TeacherDraftCallback(CallbackData, prefix="teacher"):
     section: Literal["publish"] = "publish"
     action: Literal["confirm", "cancel"]
@@ -38,6 +43,25 @@ class StudentDraftCallback(CallbackData, prefix="student"):
     section: Literal["submit"] = "submit"
     action: Literal["confirm", "cancel"]
     nonce: str = Field(min_length=16, max_length=16, pattern=r"^[a-f0-9]+$")
+
+
+def assignment_format_keyboard() -> InlineKeyboardMarkup:
+    return selection_keyboard(
+        [
+            (
+                "Очная сдача",
+                AssignmentFormatCallback(action="in_person").pack(),
+            ),
+            (
+                "Онлайн-сдача",
+                AssignmentFormatCallback(action="online").pack(),
+            ),
+            (
+                "Отмена",
+                AssignmentFormatCallback(action="cancel").pack(),
+            ),
+        ]
+    )
 
 
 def selection_keyboard(

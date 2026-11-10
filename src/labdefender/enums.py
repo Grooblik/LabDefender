@@ -6,6 +6,11 @@ class Role(StrEnum):
     TEACHER = "teacher"
 
 
+class AssignmentFormat(StrEnum):
+    ONLINE = "online"
+    IN_PERSON = "in_person"
+
+
 class SubmissionKind(StrEnum):
     PDF = "pdf"
     ZIP = "zip"

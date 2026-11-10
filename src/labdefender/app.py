@@ -79,7 +79,12 @@ async def _run(settings: Settings, path: Path) -> None:
                     BotCommand(command="cancel", description="Отменить ввод"),
                     BotCommand(command="teacher", description="Доступ преподавателя"),
                     BotCommand(command="my_groups", description="Мои группы"),
+                    BotCommand(command="create_group", description="Создать группу"),
+                    BotCommand(command="invite", description="Пригласить студентов"),
+                    BotCommand(command="new_assignment", description="Новое задание"),
+                    BotCommand(command="submissions", description="Проверить решения"),
                     BotCommand(command="assignments", description="Задания студента"),
+                    BotCommand(command="new_slot", description="Открыть слот защиты"),
                     BotCommand(command="queue", description="Защита и очередь"),
                 ]
             )
