@@ -200,3 +200,19 @@ def test_offline_smoke_cli_does_not_require_environment_or_network(tmp_path):
     result = child(code)
     assert result.returncode == 0, result.stderr
     assert "Без Telegram" in result.stdout
+
+
+async def test_backup_accepts_database_created_before_additive_tables(tmp_path):
+    source = tmp_path / "old.sqlite3"
+    await seed_demo(source, teacher_id=101, student_ids=(202,))
+    with closing(sqlite3.connect(source)) as connection:
+        connection.execute("DROP TABLE notification_settings")
+        connection.commit()
+    assert check_database(source) == ("notification_settings",)
+    backup = backup_database(source, tmp_path / "backup.sqlite3")
+    assert check_database(backup) == ("notification_settings",)
+    with closing(sqlite3.connect(source)) as connection:
+        connection.execute("DROP TABLE queue_entries")
+        connection.commit()
+    with pytest.raises(LocalOperationError, match="отсутствуют таблицы"):
+        backup_database(source, tmp_path / "broken.sqlite3")

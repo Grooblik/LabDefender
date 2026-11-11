@@ -2,10 +2,12 @@
 
 ## Что уже доступно
 
-- `labdefender.app.create_dispatcher(session_factory, settings=settings)` подключает
-  общий роутер с регистрацией, затем студента, преподавателя и последним fallback.
-  Без `settings` фабрика тоже работает, но регистрация по коду и админ-доступ
-  отключены — это удобно для изолированных тестов.
+- `labdefender.app.create_dispatcher(session_factory, settings=settings, notifier=...)`
+  подключает общий роутер с регистрацией, затем студента, преподавателя, роутер
+  уведомлений и последним fallback. Без `settings` фабрика тоже работает, но регистрация
+  по коду и админ-доступ отключены — это удобно для изолированных тестов. Без `notifier`
+  уведомления отправляются сразу внутри обработчика (детерминированно для тестов);
+  `run()` передаёт `Notifier(background=True, delay=0.05)`.
 - Обработчики работают в личном чате. Групповые сообщения и inline-mode callbacks
   не входят в MVP.
 - Аргументы обработчика `session: AsyncSession` и `current_user: User` заполняются
@@ -17,8 +19,10 @@
   Общий `/start join_<token>` регистрирует участие студента, включая первый вход.
 - `/new_assignment` и `/submissions` работают у преподавателя, `/assignments` —
   у студента. Кнопки заданий и проверки уже подключены к карточкам групп.
-- `/new_slot` создаёт слот защиты для задания. `/queue` работает для обеих
-  ролей, переход студента к записи также есть в карточке допущенного задания.
+- `/new_slot` создаёт слот защиты для задания через мастер с кнопками (календарь,
+  сетка времени, длительность, места, повтор прошлого слота) или ручной текстовый ввод.
+  `/queue` работает для обеих ролей, переход студента к записи также есть в карточке
+  допущенного задания.
 - Новая Telegram-учётка автоматически сохраняется как `student`; кнопка
   «Я преподаватель» и `/teacher` начинают проверку кода. Смена имени не сбрасывает роль.
 - `TEACHER_REGISTRATION_CODE` задаётся в `.env`, `ADMIN_IDS` — JSON-массив Telegram ID.
@@ -26,6 +30,10 @@
   пользователю; админ-права не зависят от учебной роли.
 - Роли: `Role.STUDENT`, `Role.TEACHER`. Статусы: `PENDING`, `RETURNED`, `APPROVED`.
   В БД сохраняются строковые значения в нижнем регистре из общих enum-ов.
+- Уведомления второй стороне подключены к сдаче, проверке, публикации, вступлению,
+  созданию и повторному открытию слота, записи и смене слота. `/notifications`
+  работает для обеих ролей: преподаватель управляет категориями, студент видит,
+  что его уведомления не отключаются. Контракт — в разделе «Уведомления».
 
 ## Где писать
 
@@ -34,7 +42,8 @@
 `states/teacher.py` либо одноимённые подпапки по мере роста.
 
 Общие файлы `app.py`, `config.py`, `enums.py`, `db/`, `middlewares/`,
-`handlers/common.py`, `services/users.py` меняет автор ядра. Изменения схемы сначала
+`handlers/common.py`, `handlers/notifications.py`, `services/users.py`,
+`services/notifications.py` меняет автор ядра. Изменения схемы сначала
 согласовываем: иначе разработчики получат несовместимые локальные SQLite-базы.
 Остальные сервисы закрепляем за одним человеком на этапе реализации.
 
@@ -229,10 +238,37 @@ async with immediate_transaction(session):
 ## Слоты защиты и очередь: готовый контракт
 
 Ролевые обработчики — `handlers/student/defense.py`, `handlers/teacher/defense.py`,
-общий показ — `handlers/defense.py`. Callback находятся в `keyboards/defense.py`:
-`student:queue:...`, `teacher:queue:...`, `student:queue_confirm:...`,
-`teacher:day_confirm:...`. FSM `DefenseSlotCreation` и `QueueChange` хранят только
-черновик и снимок своей записи для подтверждения.
+мастер создания слота — `handlers/teacher/slots.py`, общий показ — `handlers/defense.py`.
+Callback находятся в `keyboards/defense.py`: `student:queue:...`, `teacher:queue:...`,
+`student:queue_confirm:...`, `teacher:day_confirm:...`; кнопки мастера —
+в `keyboards/slots.py`: `teacher:slot:<action>:<value>:<nonce>`. FSM `DefenseSlotCreation`
+и `QueueChange` хранят только черновик и снимок своей записи для подтверждения.
+
+### Мастер слота
+
+`start_slot_wizard(message, session, user, state, assignment_id=...)` проверяет роль
+и владельца задания, затем открывает календарь. Шаги — состояния `DefenseSlotCreation`:
+`date → start_time → end_time → capacity → confirmation`. На каждом шаге
+принимается и кнопка, и текст (`YYYY-MM-DD`, `HH:MM`, число), поэтому пресеты
+необязательны. При входе в шаг черновик теряет значения следующих шагов и получает
+новый `nonce`: кнопки предыдущих шагов, других черновиков и повторные нажатия
+отвечают «Кнопка устарела». Нажатие кнопки редактирует сообщение мастера
+(`edit_text`); если Telegram отказал, шаг приходит новым сообщением. После текстового
+ввода следующий шаг всегда отправляется новым сообщением. Кнопки `noop` (дни недели,
+пустые клетки) только отвечают на callback.
+
+`value` в callback — номер страницы календаря, дата `YYYYMMDD`, минуты от полуночи,
+длительность, число мест или ID слота-шаблона. Это лишь указатель: дата и время заново
+проверяются `validate_defense_slot`, шаблон — через `require_defense_slot_access`,
+а запись, пересечения и прошедшее время — в `create_defense_slot` при подтверждении.
+Сетка и пресеты — константы `keyboards/slots.py`; функции `start_options`,
+`duration_options`, `template_fits` и сборщики клавиатур чистые и не обращаются к БД.
+Страницы календаря строит `calendar_pages(today)`: три строки-недели, точки в начале
+(дни недели до первой даты) повторяются в конце, но не меньше 14 дат; каждая страница
+начинается со дня после предыдущей, последняя — не позже чем через 365 дней.
+`calendar_window(today, page)` возвращает границы страницы или `ValueError`,
+который мастер показывает как устаревшую кнопку.
+Callback мастера, включая ID шаблона до `2**63 − 1`, укладываются в 64 байта.
 
 Все операции используют общий `services/queue.py`:
 
@@ -242,6 +278,12 @@ async with immediate_transaction(session):
   по Москве, `start_time < end_time` и положительный целый лимит. Пара
   «задание + дата + начало» уникальна, пересекающиеся слоты задания отклоняются.
   Повтор тех же параметров безопасен; изменение лимита существующего слота отклоняется.
+- `list_slots_between(session, actor_id=..., assignment_id=..., first_day=..., last_day=...)`
+  возвращает кортеж `DefenseSlot` задания за период включительно, по дате и началу.
+  Только для преподавателя-владельца; нужен мастеру для отметок и скрытия занятого времени.
+- `latest_slot_template(session, actor_id=..., assignment_id=...)` возвращает последний
+  созданный слот преподавателя с приоритетом: это задание, затем его группа, затем любой
+  свой слот. `None`, если слотов нет. Используется кнопкой «Как в прошлый раз».
 - `require_approved(session, actor_id=..., assignment_id=...)` возвращает последнюю
   собственную `APPROVED`-попытку студента с `approved_at` или выбрасывает ошибку.
 - `list_defense_slots(session, actor_id=..., assignment_id=..., offset=0)` возвращает
@@ -265,6 +307,13 @@ async with immediate_transaction(session):
 - `move_to_end(session, actor_id=..., assignment_id=..., expected_entry_id=...,
   expected_order_at=...)` переносит собственную запись в конец выбранного слота
   и возвращает `QueueEntry`. Последняя запись остаётся без изменения порядка.
+- `close_defense_slot(session, actor_id=..., slot_id=...)` закрывает слот для новых
+  записей и возвращает `DefenseSlot`. `reopen_defense_slot(...)` открывает будущий слот
+  и возвращает `ReopenSlotResult` (`slot`, `reopened`); `reopened` — `False`, если слот
+  уже был открыт и ничего не изменилось. `cancel_defense_slot(...)` удаляет только пустой слот.
+- `approved_unassigned_query(assignment_id, *columns)` — общий запрос «последняя
+  попытка допущена, записи нет»; права не проверяет. Его используют
+  `list_approved_unassigned` и выбор получателей уведомления о новом слоте.
 
 `create_defense_slot`, `enroll_slot` и `move_to_end` сами открывают
 `immediate_transaction`; вызывайте их до любого чтения в свежей сессии update.
@@ -291,6 +340,52 @@ commit: повтор доставки кнопки не переносит за�
 Создание слота и изменения проверяют актуальные дату и время после получения блокировки.
 Схема таблиц обновлена: добавлены формат задания и слоты защиты.
 
+## Уведомления: готовый контракт
+
+Доставка, тексты и `/notifications` — в `handlers/notifications.py`; кнопки и тексты
+настроек — в `keyboards/notifications.py`. Зарезервированы команда `/notifications`
+и callback `teacher:notify:<category>:<enabled>:<source>`, где `category` —
+`submissions`, `joins`, `queue` или `all`, `source` — `notice` (кнопка «🔕» под
+уведомлением, ответ alert-ом) или `settings` (экран `/notifications`, сообщение
+редактируется). Роутер уведомлений подключён после ролевых и без `RoleFilter`:
+право менять настройки проверяет сервис.
+
+`Notifier` передаётся в обработчики аргументом `notifier`, бот — аргументом `bot`.
+Готовые функции вызываются **после** успешного сервиса и `state.clear()`, но **до**
+ответа автору действия, чтобы сбой этого ответа не терял уведомление:
+
+- `notify_submission_received(notifier, bot, session, submission_id=...)` —
+  преподавателю группы, категория `submissions`;
+- `notify_submission_reviewed(..., submission_id=...)` — автору о допуске или возврате;
+- `notify_assignment_published(..., assignment_id=...)` — всем студентам группы;
+- `notify_slot_opened(..., slot_id=..., reopened=False)` — допущенным без записи,
+  только для открытого будущего слота с местами;
+- `notify_student_joined(..., group_id=..., student_id=...)` — преподавателю,
+  категория `joins`; вызывать только при `JoinGroupResult.joined`;
+- `notify_queue_booking(..., entry_id=..., switched=...)` — преподавателю, категория
+  `queue`; вызывать только если `enroll_slot` действительно изменил запись.
+
+Каждая функция сама ловит и логирует любые ошибки: после commit уведомление не может
+превратить успешное действие в ошибку. Тексты собираются из БД заново; права получателя
+проверяются при нажатии кнопки обычными сервисами. `Notifier(background=False)`
+доставляет сразу, `background=True` ставит рассылку фоновой задачей, `delay` — пауза
+между сообщениями. `wait_idle()` ждёт фоновых задач (для тестов), `close()`
+вызывается при остановке и ждёт до 10 секунд. Длинный текст делится `split_text`
+(как `send_text`), кнопки — у последней части. `TelegramRetryAfter` повторяется
+один раз после паузы; прочие ошибки Telegram только логируются.
+
+Из `services/notifications.py` доступны:
+
+- `NoticeCategory` (`SUBMISSIONS`, `JOINS`, `QUEUE`) и `NotificationPreferences`
+  с методом `enabled(category)`;
+- `get_notification_preferences(session, actor_id=...)` и
+  `set_notification_preferences(session, actor_id=..., categories=..., enabled=...)` —
+  только для преподавателя, собственные настройки; запись открывает
+  `immediate_transaction` и идемпотентна;
+- `teacher_preferences`, `submission_context`, `slot_context`, `group_students`,
+  `approved_unbooked_students` — чтения для подготовки уведомления. Права не проверяют:
+  вызываются только после авторизованного и сохранённого действия.
+
 ## Общая схема после добавления форматов и слотов
 
 Модели импортируются из `labdefender.db.models`. Таблицы создаются при запуске.
@@ -309,6 +404,11 @@ commit: повтор доставки кнопки не переносит за�
 - `QueueEntry`: `id`, `slot_id`, уникальный `submission_id`, `order_at`.
 - `TeacherRegistrationAttempt`: `user_id` как PK/FK, `failed_attempts`,
   `window_started_at`. Хранит только счётчик и начало окна, не код.
+- `NotificationSetting`: `user_id` как PK/FK, флаги `submissions`, `joins`, `queue`.
+  Строка появляется при первом изменении настроек; без строки всё включено.
+  Таблица `notification_settings` создаётся `create_all`, миграция не нужна.
+  `check_database` перечисляет такие добавочные таблицы в `ADDITIVE_TABLES`:
+  их отсутствие не мешает `backup`/`restore`, `doctor` сообщает, что они будут созданы.
 
 Foreign key включены на каждом SQLite-соединении. Удаления пока не поддерживаем;
 каскадного удаления учебных данных нет. Даты дней защиты — календарные даты;
@@ -332,6 +432,7 @@ erDiagram
     Assignment ||--o{ DefenseSlot : schedules
     DefenseSlot ||--o{ QueueEntry : contains
     Submission ||--o| QueueEntry : enrolls
+    User ||--o| NotificationSetting : configures
 ```
 
 ## Готовность общих сервисов
@@ -342,8 +443,9 @@ erDiagram
 возвращают `True` при смене роли, `False`, если она уже выдана, либо доменную ошибку.
 Они принимают внутренний `actor_id`; `grant_teacher` дополнительно получает
 `target_telegram_id` и `admin_ids` из настроек. Также готовы `services.groups`,
-`services.queue` и описанные выше ролевые обработчики. Локальный запуск,
-резервирование, backup/restore и команда `migrate` также готовы.
+`services.queue`, `services.notifications` с `handlers.notifications` и описанные выше
+ролевые обработчики. Локальный запуск, резервирование, backup/restore и команда
+`migrate` также готовы.
 
 Все функции получают `session` и ID действующего пользователя; идентификаторы
 объектов передаём явно. Сервисы не зависят от `Message`, `CallbackQuery` и FSM.

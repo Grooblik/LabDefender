@@ -32,9 +32,7 @@ def format_label(value: AssignmentFormat) -> str:
     return FORMAT_LABELS.get(value, value.value)
 
 
-async def send_text(
-    message: Message, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
-) -> None:
+def split_text(text: str) -> list[str]:
     # Telegram limits text in UTF-16 units; never split an astral character in half.
     chunks, buffer, units = [], [], 0
     for character in text:
@@ -45,6 +43,13 @@ async def send_text(
         buffer.append(character)
         units += weight
     chunks.append("".join(buffer))
+    return chunks
+
+
+async def send_text(
+    message: Message, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
+) -> None:
+    chunks = split_text(text)
     for index, chunk in enumerate(chunks):
         await message.answer(
             chunk,

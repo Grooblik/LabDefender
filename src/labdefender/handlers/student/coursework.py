@@ -1,7 +1,7 @@
 import secrets
 from dataclasses import asdict
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -19,6 +19,7 @@ from labdefender.handlers.coursework import (
     show_submission,
     show_submissions,
 )
+from labdefender.handlers.notifications import Notifier, notify_submission_received
 from labdefender.keyboards.coursework import (
     StudentCourseCallback,
     StudentDraftCallback,
@@ -135,6 +136,8 @@ def create_router() -> Router:
         session: AsyncSession,
         current_user: User,
         state: FSMContext,
+        bot: Bot,
+        notifier: Notifier,
     ) -> None:
         if not isinstance(callback.message, Message):
             raise StaleCourseAction()
@@ -153,6 +156,7 @@ def create_router() -> Router:
                 solution=Solution(**data["solution"]),
             )
             await state.clear()
+            await notify_submission_received(notifier, bot, session, submission_id=submission.id)
             await callback.message.answer(
                 f"Попытка №{submission.attempt_number} отправлена на проверку.",
                 reply_markup=selection_keyboard(

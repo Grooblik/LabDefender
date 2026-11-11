@@ -1,6 +1,6 @@
 import secrets
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -16,6 +16,11 @@ from labdefender.handlers.coursework import (
     show_course_groups,
     show_submission,
     show_submissions,
+)
+from labdefender.handlers.notifications import (
+    Notifier,
+    notify_assignment_published,
+    notify_submission_reviewed,
 )
 from labdefender.keyboards.coursework import (
     AssignmentFormatCallback,
@@ -56,6 +61,8 @@ def create_router() -> Router:
         session: AsyncSession,
         current_user: User,
         state: FSMContext,
+        bot: Bot,
+        notifier: Notifier,
     ) -> None:
         if not isinstance(callback.message, Message):
             raise StaleCourseAction()
@@ -98,8 +105,9 @@ def create_router() -> Router:
                 submission_id=object_id,
                 decision=SubmissionStatus.APPROVED,
             )
+            await notify_submission_reviewed(notifier, bot, session, submission_id=object_id)
             await callback.message.answer(
-                "Работа допущена. Студент увидит статус в карточке задания."
+                "Работа допущена. Студенту отправлено уведомление, статус есть в карточке задания."
             )
         elif action == "return":
             await require_reviewable(session, actor_id=current_user.id, submission_id=object_id)
@@ -173,6 +181,8 @@ def create_router() -> Router:
         session: AsyncSession,
         current_user: User,
         state: FSMContext,
+        bot: Bot,
+        notifier: Notifier,
     ) -> None:
         if not isinstance(callback.message, Message):
             raise StaleCourseAction()
@@ -192,6 +202,7 @@ def create_router() -> Router:
                 format=data["format"],
             )
             await state.clear()
+            await notify_assignment_published(notifier, bot, session, assignment_id=assignment.id)
             await callback.message.answer(
                 f"Задание «{assignment.title}» опубликовано.",
                 reply_markup=selection_keyboard(
@@ -209,7 +220,12 @@ def create_router() -> Router:
 
     @router.message(SubmissionReview.comment, PlainTextInput())
     async def return_comment(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
+        message: Message,
+        session: AsyncSession,
+        current_user: User,
+        state: FSMContext,
+        bot: Bot,
+        notifier: Notifier,
     ) -> None:
         data = await state.get_data()
         await review_submission(
@@ -220,7 +236,12 @@ def create_router() -> Router:
             comment=message.text,
         )
         await state.clear()
-        await message.answer("Работа возвращена на доработку. Комментарий доступен студенту.")
+        await notify_submission_reviewed(
+            notifier, bot, session, submission_id=data["submission_id"]
+        )
+        await message.answer(
+            "Работа возвращена на доработку. Студенту отправлено уведомление с комментарием."
+        )
 
     @router.message(AssignmentCreation.format)
     async def format_requires_button(message: Message) -> None:
