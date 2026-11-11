@@ -15,6 +15,7 @@ from labdefender.services.assignments import get_assignment, list_assignments
 from labdefender.services.errors import SolutionDeliveryUnavailable, StaleCourseAction
 from labdefender.services.groups import get_group, list_groups
 from labdefender.services.pagination import PAGE_SIZE
+from labdefender.services.queue import list_approved_unassigned
 from labdefender.services.submissions import (
     STATUS_LABELS,
     get_submission,
@@ -172,6 +173,38 @@ async def show_student_assignment(
     await send_text(message, f"Статус: {status}{comment}", reply_markup=selection_keyboard(buttons))
 
 
+async def show_unassigned(
+    message: Message, session: AsyncSession, user: User, *, assignment_id: int, offset: int
+) -> None:
+    assignment = await get_assignment(session, actor_id=user.id, assignment_id=assignment_id)
+    page = await list_approved_unassigned(
+        session, actor_id=user.id, assignment_id=assignment_id, offset=offset
+    )
+
+    def page_button(start: int) -> str:
+        return TeacherCourseCallback(
+            action="unassigned", object_id=assignment_id, offset=start
+        ).pack()
+
+    names = "\n".join(item.student_name for item in page.items)
+    empty = "На этой странице записей нет." if offset else "Нет допущенных студентов без записи."
+    await send_text(
+        message,
+        f"Задание: {assignment.title}\nДопущены, но не записались\n\n{names or empty}",
+        reply_markup=selection_keyboard(
+            [
+                ("Обновить", page_button(offset)),
+                (
+                    "Назад к заданию",
+                    TeacherCourseCallback(action="attempts", object_id=assignment_id).pack(),
+                ),
+            ],
+            previous=page_button(max(0, offset - PAGE_SIZE)) if offset else None,
+            following=page_button(offset + PAGE_SIZE) if page.has_next else None,
+        ),
+    )
+
+
 async def show_submissions(
     message: Message, session: AsyncSession, user: User, *, assignment_id: int, offset: int = 0
 ) -> None:
@@ -187,7 +220,11 @@ async def show_submissions(
             (
                 "Слоты защиты и очередь",
                 TeacherQueueCallback(action="days", object_id=assignment_id).pack(),
-            )
+            ),
+            (
+                "Допущены, но не записались",
+                TeacherCourseCallback(action="unassigned", object_id=assignment_id).pack(),
+            ),
         ]
         if teacher
         else []
