@@ -16,6 +16,7 @@ from labdefender.handlers.coursework import (
     show_course_groups,
     show_submission,
     show_submissions,
+    show_unassigned,
 )
 from labdefender.handlers.notifications import (
     Notifier,
@@ -91,6 +92,10 @@ def create_router() -> Router:
         elif action == "review_list":
             await show_assignments(
                 callback.message, session, current_user, group_id=object_id, offset=offset
+            )
+        elif action == "unassigned":
+            await show_unassigned(
+                callback.message, session, current_user, assignment_id=object_id, offset=offset
             )
         elif action == "attempts":
             await show_submissions(
