@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LabDefender</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Outside a Telegram client these replace the native Back and Main buttons. -->
+  <nav id="back-row" hidden><button type="button" class="link" id="back">← Назад</button></nav>
+  <main id="app"><p class="hint">Загрузка…</p></main>
+  <div id="main-action" hidden><button type="button" class="primary wide" id="main-button"></button></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

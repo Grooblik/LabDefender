@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from labdefender.db.models import User
+from labdefender.db.models import Assignment, User
 from labdefender.enums import SubmissionStatus
 from labdefender.filters.plain_text import PlainTextInput
 from labdefender.handlers.coursework import (
@@ -36,6 +36,27 @@ from labdefender.services.submissions import (
     text_solution,
 )
 from labdefender.states.coursework import SolutionSubmission
+
+SOLUTION_PROMPT = "Отправьте один PDF/ZIP до 20 МиБ, текст или ссылку HTTP(S)."
+
+
+async def begin_solution(
+    session: AsyncSession, user: User, state: FSMContext, *, assignment_id: int
+) -> Assignment:
+    """Put the student's chat into the solution step; also used by the Mini App's file button."""
+    assignment = await get_assignment(session, actor_id=user.id, assignment_id=assignment_id)
+    latest = await latest_submission(session, actor_id=user.id, assignment_id=assignment_id)
+    if latest is not None and latest.status != SubmissionStatus.RETURNED:
+        raise SubmissionConflict()
+    await state.set_data(
+        {"assignment_id": assignment.id, "previous_id": latest.id if latest else None}
+    )
+    await state.set_state(SolutionSubmission.payload)
+    return assignment
+
+
+def solution_prompt(assignment: Assignment) -> str:
+    return f"Задание: {assignment.title}\n{SOLUTION_PROMPT}"
 
 
 def create_router() -> Router:
@@ -70,22 +91,9 @@ def create_router() -> Router:
                 callback.message, session, current_user, assignment_id=object_id
             )
         elif action == "submit":
-            assignment = await get_assignment(
-                session, actor_id=current_user.id, assignment_id=object_id
-            )
-            latest = await latest_submission(
-                session, actor_id=current_user.id, assignment_id=object_id
-            )
-            if latest is not None and latest.status != SubmissionStatus.RETURNED:
-                raise SubmissionConflict()
-            await state.set_data(
-                {"assignment_id": assignment.id, "previous_id": latest.id if latest else None}
-            )
-            await state.set_state(SolutionSubmission.payload)
+            assignment = await begin_solution(session, current_user, state, assignment_id=object_id)
             await callback.message.answer(
-                f"Задание: {assignment.title}\n"
-                "Отправьте один PDF/ZIP до 20 МиБ, текст или ссылку HTTP(S).",
-                reply_markup=cancel_keyboard(),
+                solution_prompt(assignment), reply_markup=cancel_keyboard()
             )
         elif action == "history":
             await show_submissions(

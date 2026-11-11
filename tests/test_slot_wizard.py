@@ -12,23 +12,25 @@ from labdefender.app import create_dispatcher
 from labdefender.db.models import DefenseSlot
 from labdefender.enums import AssignmentFormat
 from labdefender.keyboards.slots import (
-    WEEKDAYS,
     TeacherSlotCallback,
     calendar_keyboard,
-    calendar_pages,
-    calendar_window,
     capacity_keyboard,
     duration_keyboard,
-    duration_label,
-    duration_options,
-    range_label,
     slot_confirmation_keyboard,
     start_keyboard,
-    start_options,
 )
 from labdefender.services.assignments import create_assignment
 from labdefender.services.groups import create_group
 from labdefender.services.queue import create_defense_slot
+from labdefender.services.slot_grid import (
+    WEEKDAYS,
+    calendar_pages,
+    calendar_window,
+    duration_label,
+    duration_options,
+    range_label,
+    start_options,
+)
 
 NONCE = "0123456789abcdef"
 MOSCOW = ZoneInfo("Europe/Moscow")

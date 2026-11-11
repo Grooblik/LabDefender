@@ -25,23 +25,13 @@ from labdefender.handlers.notifications import Notifier, notify_slot_opened
 from labdefender.keyboards.defense import TeacherDayDraftCallback
 from labdefender.keyboards.menu import cancel_keyboard
 from labdefender.keyboards.slots import (
-    MINUTES_PER_DAY,
     TeacherSlotCallback,
     calendar_keyboard,
-    calendar_window,
     capacity_keyboard,
     duration_keyboard,
-    duration_options,
-    from_minutes,
-    interval_label,
     parse_date_value,
-    range_label,
     slot_confirmation_keyboard,
     start_keyboard,
-    start_options,
-    template_fits,
-    to_minutes,
-    weekday_label,
 )
 from labdefender.services import queue as queue_service
 from labdefender.services.access import (
@@ -55,6 +45,18 @@ from labdefender.services.queue import (
     latest_slot_template,
     list_slots_between,
     validate_defense_slot,
+)
+from labdefender.services.slot_grid import (
+    MINUTES_PER_DAY,
+    calendar_window,
+    duration_options,
+    from_minutes,
+    interval_label,
+    range_label,
+    start_options,
+    template_fits,
+    to_minutes,
+    weekday_label,
 )
 from labdefender.states.defense import DefenseSlotCreation
 

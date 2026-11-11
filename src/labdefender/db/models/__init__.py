@@ -8,6 +8,7 @@ from labdefender.db.models.domain import (
     Submission,
 )
 from labdefender.db.models.notifications import NotificationSetting
+from labdefender.db.models.profile import UserProfile
 from labdefender.db.models.user import User
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "Submission",
     "TeacherRegistrationAttempt",
     "User",
+    "UserProfile",
 ]

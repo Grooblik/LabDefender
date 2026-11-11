@@ -65,7 +65,9 @@ def instance_locks(path: Path, *, bot_id: int) -> Iterator[None]:
 
 # Tables added after the first schema. `create_all` adds them at the next bot start, so an
 # older database without them is still a valid LabDefender database for backup and restore.
-ADDITIVE_TABLES = frozenset({"teacher_registration_attempts", "notification_settings"})
+ADDITIVE_TABLES = frozenset(
+    {"teacher_registration_attempts", "notification_settings", "user_profiles"}
+)
 
 
 def check_database(path: Path, *, allow_missing_tables: bool = False) -> tuple[str, ...]:

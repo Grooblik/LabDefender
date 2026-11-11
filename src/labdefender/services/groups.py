@@ -2,10 +2,10 @@ import re
 import secrets
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from labdefender.db.models import Membership, StudyGroup
+from labdefender.db.models import Membership, StudyGroup, User
 from labdefender.db.transactions import immediate_transaction
 from labdefender.enums import Role
 from labdefender.services.access import require_group_member, require_group_owner, require_user
@@ -16,6 +16,7 @@ from labdefender.services.errors import (
     InvitationUnavailable,
     ObjectUnavailable,
 )
+from labdefender.services.pagination import PAGE_SIZE, Page, validate_offset
 
 GROUP_PAGE_SIZE = 8
 
@@ -95,6 +96,32 @@ async def get_group(session: AsyncSession, *, actor_id: int, group_id: int) -> S
     if user.role == Role.TEACHER:
         return await require_group_owner(session, actor_id=actor_id, group_id=group_id)
     return await require_group_member(session, actor_id=actor_id, group_id=group_id)
+
+
+async def count_members(session: AsyncSession, *, actor_id: int, group_id: int) -> int:
+    await get_group(session, actor_id=actor_id, group_id=group_id)
+    return await session.scalar(
+        select(func.count()).select_from(Membership).where(Membership.group_id == group_id)
+    )
+
+
+async def list_members(
+    session: AsyncSession, *, actor_id: int, group_id: int, offset: int = 0
+) -> Page[User]:
+    """Students of the teacher's own group by name; the same members `count_members` counts."""
+    validate_offset(offset)
+    await require_group_owner(session, actor_id=actor_id, group_id=group_id)
+    users = (
+        await session.scalars(
+            select(User)
+            .join(Membership, Membership.student_id == User.id)
+            .where(Membership.group_id == group_id)
+            .order_by(User.full_name, User.id)
+            .offset(offset)
+            .limit(PAGE_SIZE + 1)
+        )
+    ).all()
+    return Page(items=tuple(users[:PAGE_SIZE]), offset=offset, has_next=len(users) > PAGE_SIZE)
 
 
 async def get_invite_link(

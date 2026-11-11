@@ -11,10 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from labdefender.db.models import User
 from labdefender.enums import Role
 from labdefender.filters.plain_text import PlainTextInput
-from labdefender.keyboards.menu import MenuCallback, cancel_keyboard, main_menu
+from labdefender.keyboards.menu import MenuCallback, cancel_keyboard, main_menu, name_keyboard
 from labdefender.services.auth import grant_teacher, register_teacher
 from labdefender.services.errors import AccessDenied, RegistrationBlocked, RegistrationDisabled
-from labdefender.states.registration import TeacherGrant, TeacherRegistration
+from labdefender.services.users import (
+    DISPLAY_NAME_LIMIT,
+    has_chosen_name,
+    reset_display_name,
+    set_display_name,
+)
+from labdefender.states.registration import DisplayName, TeacherGrant, TeacherRegistration
 
 TEACHER_MENU_HINT = "Разделы преподавателя — на кнопках под полем ввода."
 
@@ -68,8 +74,68 @@ async def grant_and_report(
     )
 
 
+async def request_display_name(
+    message: Message, session: AsyncSession, current_user: User, state: FSMContext
+) -> None:
+    await state.clear()
+    await state.set_state(DisplayName.waiting_for_name)
+    await message.answer(
+        f"Сейчас вас видят как «{current_user.full_name}». Отправьте имя и фамилию так, "
+        f"как их должны видеть преподаватель и студенты (до {DISPLAY_NAME_LIMIT} символов). "
+        "Username из Telegram остаётся рядом с именем.",
+        reply_markup=name_keyboard(chosen=await has_chosen_name(session, user_id=current_user.id)),
+    )
+
+
 def create_router() -> Router:
     router = Router(name="registration")
+
+    @router.message(Command("name"))
+    async def name_command(
+        message: Message, session: AsyncSession, current_user: User, state: FSMContext
+    ) -> None:
+        await request_display_name(message, session, current_user, state)
+
+    @router.callback_query(MenuCallback.filter(F.action == "name"))
+    async def name_button(
+        callback: CallbackQuery, session: AsyncSession, current_user: User, state: FSMContext
+    ) -> None:
+        if isinstance(callback.message, Message):
+            await request_display_name(callback.message, session, current_user, state)
+        await callback.answer()
+
+    @router.message(DisplayName.waiting_for_name, PlainTextInput())
+    async def name_message(
+        message: Message, session: AsyncSession, current_user: User, state: FSMContext
+    ) -> None:
+        # An invalid name keeps the step: the domain error asks for it again.
+        user = await set_display_name(session, actor_id=current_user.id, name=message.text)
+        await state.clear()
+        await message.answer(
+            f"Имя сохранено: «{user.full_name}». Так вас видят в списках, очереди и уведомлениях.",
+            reply_markup=main_menu(user.role),
+        )
+
+    @router.message(DisplayName.waiting_for_name, ~F.text)
+    async def name_requires_text(message: Message) -> None:
+        await message.answer(
+            "Отправьте имя текстом или нажмите «Отмена».", reply_markup=cancel_keyboard()
+        )
+
+    @router.callback_query(MenuCallback.filter(F.action == "name_reset"))
+    async def name_reset(
+        callback: CallbackQuery, session: AsyncSession, current_user: User, state: FSMContext
+    ) -> None:
+        user = await reset_display_name(
+            session, actor_id=current_user.id, telegram_name=callback.from_user.full_name
+        )
+        await state.clear()
+        if isinstance(callback.message, Message):
+            await callback.message.answer(
+                f"Имя из Telegram восстановлено: «{user.full_name}».",
+                reply_markup=main_menu(user.role),
+            )
+        await callback.answer()
 
     @router.message(Command("teacher"))
     async def teacher_command(

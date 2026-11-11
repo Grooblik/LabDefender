@@ -1,4 +1,5 @@
 from typing import Literal
+from urllib.parse import urlsplit
 
 from aiogram.utils.token import TokenValidationError, validate_token
 from pydantic import Field, SecretStr, field_validator
@@ -33,6 +34,33 @@ class Settings(DatabaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     teacher_registration_code: SecretStr = SecretStr("")
     admin_ids: frozenset[int] = frozenset()
+    # Mini App: public HTTPS base address; empty disables the web server and the menu button.
+    webapp_url: str = ""
+    web_host: str = Field(default="127.0.0.1", min_length=1)
+    web_port: int = Field(default=8080, ge=1, le=65535)
+    # Maximum age of Telegram initData accepted by the API, in seconds.
+    webapp_auth_max_age: int = Field(default=86400, ge=60, le=7 * 86400)
+    # Token of a Cloudflare tunnel with a permanent address (WEBAPP_URL); used with --tunnel.
+    tunnel_token: SecretStr = SecretStr("")
+
+    @field_validator("webapp_url")
+    @classmethod
+    def https_webapp_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if not value:
+            return ""
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment:
+            raise ValueError("WEBAPP_URL должен быть адресом https:// без параметров")
+        return value
+
+    @field_validator("tunnel_token")
+    @classmethod
+    def plain_tunnel_token(cls, value: SecretStr) -> SecretStr:
+        token = value.get_secret_value().strip()
+        if any(character.isspace() for character in token) or len(token) > 4096:
+            raise ValueError("TUNNEL_TOKEN — одна строка из панели Cloudflare, без пробелов")
+        return SecretStr(token)
 
     @field_validator("teacher_registration_code")
     @classmethod

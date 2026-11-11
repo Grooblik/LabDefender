@@ -78,7 +78,7 @@ def test_menu_layouts_and_commands_cover_every_button():
     assert set(MENU_COMMANDS) == set(MenuButton)
     keyboard = main_menu(Role.TEACHER)
     assert keyboard.is_persistent is True and keyboard.resize_keyboard is True
-    for action in ("cancel", "id", "notifications", "grant"):
+    for action in ("cancel", "id", "notifications", "grant", "name", "name_reset"):
         assert len(MenuCallback(action=action).pack().encode()) <= 64
 
 
@@ -186,7 +186,12 @@ async def test_help_lists_sections_with_commands_and_role_buttons(context, bot):
     student_help = sent(bot)[-1]
     assert "📚 Задания — /assignments" in student_help.text
     assert "/grant_teacher" not in student_help.text
-    assert labels(student_help) == ["🆔 Мой Telegram ID", "🔔 Уведомления", "🎓 Я преподаватель"]
+    assert labels(student_help) == [
+        "🆔 Мой Telegram ID",
+        "✏️ Моё имя",
+        "🔔 Уведомления",
+        "🎓 Я преподаватель",
+    ]
     await press(dispatcher, bot, button(student_help, "🆔 Мой Telegram ID"), user=STUDENT)
     assert sent(bot)[-1].text == "Ваш Telegram ID: 202"
     await press(dispatcher, bot, button(student_help, "🔔 Уведомления"), user=STUDENT)
@@ -198,9 +203,50 @@ async def test_help_lists_sections_with_commands_and_role_buttons(context, bot):
     assert "/grant_teacher" in teacher_help.text
     assert labels(teacher_help) == [
         "🆔 Мой Telegram ID",
+        "✏️ Моё имя",
         "➕ Создать группу",
         "👤 Выдать роль преподавателя",
     ]
+
+
+async def test_user_chooses_a_name_that_telegram_does_not_overwrite(context, bot):
+    sessions, ids, *_ = context
+    dispatcher = create_dispatcher(sessions)
+
+    async def name_of(telegram_id):
+        async with sessions() as session:
+            return (await session.get(User, ids[telegram_id])).full_name
+
+    await dispatcher.feed_update(bot, message_update("/help", user_id=STUDENT))
+    await press(dispatcher, bot, button(sent(bot)[-1], "✏️ Моё имя"), user=STUDENT)
+    prompt = sent(bot)[-1]
+    assert "Сейчас вас видят как «User202»" in prompt.text
+    assert labels(prompt) == ["Отмена"]
+    # A section button interrupts the step and is not taken for a name.
+    await dispatcher.feed_update(bot, message_update("📚 Задания", user_id=STUDENT))
+    await dispatcher.feed_update(bot, message_update("Анна", user_id=STUDENT))
+    assert await name_of(STUDENT) == "User202"
+
+    await dispatcher.feed_update(bot, message_update("/name", user_id=STUDENT))
+    await dispatcher.feed_update(bot, message_update("x" * 129, user_id=STUDENT))
+    assert sent(bot)[-1].text.startswith("Имя должно содержать от 1 до 128 символов")
+    await dispatcher.feed_update(bot, message_update("  Анна \n Смирнова ", user_id=STUDENT))
+    saved = sent(bot)[-1]
+    assert saved.text.startswith("Имя сохранено: «Анна Смирнова».")
+    assert isinstance(saved.reply_markup, ReplyKeyboardMarkup)
+    # Every update refreshes the user from Telegram, but keeps the chosen name.
+    await dispatcher.feed_update(bot, message_update("/id", user_id=STUDENT))
+    assert await name_of(STUDENT) == "Анна Смирнова"
+
+    await dispatcher.feed_update(bot, message_update("/name", user_id=STUDENT))
+    prompt = sent(bot)[-1]
+    assert "«Анна Смирнова»" in prompt.text
+    assert labels(prompt) == ["Вернуть имя из Telegram", "Отмена"]
+    await press(dispatcher, bot, button(prompt, "Вернуть имя из Telegram"), user=STUDENT)
+    assert sent(bot)[-1].text == "Имя из Telegram восстановлено: «User202»."
+    assert await name_of(STUDENT) == "User202"
+    await dispatcher.feed_update(bot, message_update("Не имя", user_id=STUDENT))
+    assert await name_of(STUDENT) == "User202"
 
 
 async def test_admin_grants_teacher_role_with_buttons(context, bot):

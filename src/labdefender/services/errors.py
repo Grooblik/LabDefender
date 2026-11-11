@@ -108,6 +108,11 @@ class ObjectUnavailable(DomainError):
         super().__init__("Объект не найден или недоступен.")
 
 
+class InvalidDisplayName(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Имя должно содержать от 1 до 128 символов. Введите его заново.")
+
+
 class InvalidGroupName(DomainError):
     def __init__(self) -> None:
         super().__init__(

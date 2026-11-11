@@ -7,10 +7,12 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 
 from labdefender.enums import Role
 from labdefender.keyboards.groups import create_group_button
+from labdefender.web import mini_app_url
 
 
 class MenuButton(StrEnum):
@@ -55,10 +57,13 @@ MENU_LAYOUT = {
 MENU_TEXTS = frozenset(button.value for button in MenuButton)
 
 GRANT_LABEL = "👤 Выдать роль преподавателя"
+APP_LABEL = "📱 Открыть приложение"
+NAME_LABEL = "✏️ Моё имя"
+NAME_RESET_LABEL = "Вернуть имя из Telegram"
 
 
 class MenuCallback(CallbackData, prefix="menu"):
-    action: Literal["cancel", "id", "notifications", "grant"]
+    action: Literal["cancel", "id", "notifications", "grant", "name", "name_reset"]
 
 
 def main_menu(role: Role) -> ReplyKeyboardMarkup:
@@ -90,14 +95,43 @@ def cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def help_keyboard(role: Role, *, admin: bool) -> InlineKeyboardMarkup:
-    rows = [
+def name_keyboard(*, chosen: bool) -> InlineKeyboardMarkup:
+    """Under the name prompt: back to the Telegram name (when another is set) and «Отмена»."""
+    rows = []
+    if chosen:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=NAME_RESET_LABEL, callback_data=MenuCallback(action="name_reset").pack()
+                )
+            ]
+        )
+    rows.extend(cancel_keyboard().inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def app_button(webapp_url: str) -> InlineKeyboardButton:
+    # The address travels inside the message, so it is always the current one — unlike the
+    # menu button, which Telegram updates with a delay after a restart.
+    return InlineKeyboardButton(text=APP_LABEL, web_app=WebAppInfo(url=mini_app_url(webapp_url)))
+
+
+def app_keyboard(webapp_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[app_button(webapp_url)]])
+
+
+def help_keyboard(role: Role, *, admin: bool, webapp_url: str = "") -> InlineKeyboardMarkup:
+    rows = [[app_button(webapp_url)]] if webapp_url else []
+    rows.append(
         [
             InlineKeyboardButton(
                 text="🆔 Мой Telegram ID", callback_data=MenuCallback(action="id").pack()
             )
         ]
-    ]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=NAME_LABEL, callback_data=MenuCallback(action="name").pack())]
+    )
     if role == Role.STUDENT:
         rows.append(
             [

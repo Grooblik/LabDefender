@@ -1,7 +1,9 @@
 import argparse
 import asyncio
 import json
+import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -27,6 +29,8 @@ from labdefender.local import (
 )
 from labdefender.migrations import database_schema_state, migrate_database
 from labdefender.services.queue import get_student_booking
+from labdefender.tunnel import TUNNEL_URL, local_web_url, shared_tunnel
+from labdefender.web import mini_app_url
 
 
 async def telegram_check(settings: Settings) -> None:
@@ -73,10 +77,69 @@ def doctor(*, online: bool = False) -> None:
     print(f"База: {path}")
     if not settings.admin_ids and not settings.teacher_registration_code.get_secret_value():
         print("INFO: задайте ADMIN_IDS или TEACHER_REGISTRATION_CODE для доступа преподавателя.")
+    mini_app_doctor(settings)
     if online:
         asyncio.run(telegram_check(settings))
     else:
         print("INFO: Telegram не проверялся. Для проверки соединения добавьте --telegram.")
+
+
+def mini_app_doctor(settings: Settings) -> None:
+    token = bool(settings.tunnel_token.get_secret_value())
+    if settings.webapp_url:
+        print(
+            f"OK: Mini App {mini_app_url(settings.webapp_url)}, "
+            f"сервер {settings.web_host}:{settings.web_port}."
+        )
+        if TUNNEL_URL.fullmatch(settings.webapp_url):
+            print(
+                "WARN: WEBAPP_URL — временный адрес trycloudflare.com; он перестаёт работать "
+                "после перезапуска туннеля. Для временного адреса оставьте WEBAPP_URL пустым "
+                "и запускайте с --tunnel."
+            )
+    else:
+        print("INFO: Mini App выключена (WEBAPP_URL пуст); временный адрес даёт запуск с --tunnel.")
+    if token and not settings.webapp_url:
+        raise LocalOperationError(
+            "TUNNEL_TOKEN задан, а WEBAPP_URL пуст: укажите адрес https://, который в Cloudflare "
+            "ведёт на этот туннель."
+        )
+    if token:
+        print(
+            "OK: постоянный туннель Cloudflare: запуск с --tunnel поднимет его; "
+            "в Cloudflare адрес должен вести на "
+            f"{local_web_url(settings.web_host, settings.web_port)}."
+        )
+    if (token or not settings.webapp_url) and shutil.which("cloudflared") is None:
+        print("INFO: cloudflared не установлен; он нужен для запуска с --tunnel.")
+
+
+def keep_tunnel() -> None:
+    """Hold a quick tunnel in this window; bots started with --tunnel take its address."""
+    settings = Settings()
+    if settings.tunnel_token.get_secret_value():
+        raise LocalOperationError(
+            "TUNNEL_TOKEN задан: постоянный туннель поднимает сам запуск бота с --tunnel, "
+            "отдельное окно для него не нужно."
+        )
+    with shared_tunnel(local_web_url(settings.web_host, settings.web_port)) as tunnel:
+        print(
+            f"Временный туннель запущен. Mini App: {mini_app_url(tunnel.url)}\n"
+            "Оставьте это окно открытым и запустите бота с --tunnel в другом окне: он возьмёт "
+            "этот адрес, и перезапуск бота адрес не изменит.\n"
+            "Ctrl+C — остановить туннель; после этого адрес перестанет работать.",
+            flush=True,
+        )
+        while True:
+            try:
+                tunnel.process.wait(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                continue  # Short waits keep Ctrl+C responsive on every platform.
+    raise LocalOperationError(
+        "cloudflared остановился, адрес больше не работает. Запустите туннель заново: "
+        "бот возьмёт новый адрес при следующем запуске с --tunnel."
+    )
 
 
 async def offline_smoke() -> None:
@@ -144,6 +207,10 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "smoke", help="Пройти локальный сценарий во временной базе, без токена и сети"
     )
+    commands.add_parser(
+        "tunnel",
+        help="Держать временный туннель Mini App в отдельном окне (адрес переживает рестарт бота)",
+    )
     return result
 
 
@@ -154,6 +221,11 @@ def main() -> None:
             doctor(online=args.telegram)
         elif args.command == "smoke":
             asyncio.run(offline_smoke())
+        elif args.command == "tunnel":
+            try:
+                keep_tunnel()
+            except KeyboardInterrupt:
+                print("Туннель остановлен.")
         elif args.command == "seed-demo":
             data = asyncio.run(
                 seed_demo(

@@ -7,3 +7,7 @@ class TeacherRegistration(StatesGroup):
 
 class TeacherGrant(StatesGroup):
     waiting_for_id = State()
+
+
+class DisplayName(StatesGroup):
+    waiting_for_name = State()

@@ -428,7 +428,7 @@ def test_malformed_admin_settings_stop_startup_without_exposing_input(monkeypatc
     monkeypatch.setenv("BOT_TOKEN", TOKEN)
     monkeypatch.setenv("ADMIN_IDS", CODE)
     with pytest.raises(SystemExit) as error:
-        main()
+        main([])
     assert "ADMIN_IDS" in str(error.value)
     assert CODE not in str(error.value)
 
