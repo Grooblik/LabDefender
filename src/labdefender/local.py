@@ -63,6 +63,11 @@ def instance_locks(path: Path, *, bot_id: int) -> Iterator[None]:
             ) from None
 
 
+# Tables added after the first schema. `create_all` adds them at the next bot start, so an
+# older database without them is still a valid LabDefender database for backup and restore.
+ADDITIVE_TABLES = frozenset({"teacher_registration_attempts", "notification_settings"})
+
+
 def check_database(path: Path, *, allow_missing_tables: bool = False) -> tuple[str, ...]:
     path = path.resolve()
     if not path.is_file():
@@ -92,7 +97,7 @@ def check_database(path: Path, *, allow_missing_tables: bool = False) -> tuple[s
                     raise LocalOperationError(
                         f"Схема таблицы {table.name} устарела: отсутствуют нужные столбцы."
                     )
-            if missing and not allow_missing_tables:
+            if missing and not allow_missing_tables and not set(missing) <= ADDITIVE_TABLES:
                 raise LocalOperationError(
                     "В базе отсутствуют таблицы LabDefender. Проверьте версию проекта."
                 )

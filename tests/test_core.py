@@ -136,6 +136,7 @@ async def test_schema_and_foreign_keys(database):
             "defense_slots",
             "queue_entries",
             "teacher_registration_attempts",
+            "notification_settings",
         }
         assert await connection.scalar(text("PRAGMA foreign_keys")) == 1
     async with sessions() as session:

@@ -488,7 +488,10 @@ async def test_close_reopen_and_cancel_empty_slot(context):
         await book(context, slot, student=202)
     async with sessions() as session:
         reopened = await reopen_defense_slot(session, actor_id=ids[101], slot_id=slot.id)
-        assert reopened.is_open
+        assert reopened.slot.is_open and reopened.reopened
+    async with sessions() as session:
+        repeated = await reopen_defense_slot(session, actor_id=ids[101], slot_id=slot.id)
+        assert repeated.slot.is_open and not repeated.reopened
     await book(context, slot, student=202)
     async with sessions() as session:
         with pytest.raises(DefenseSlotNotEmpty):

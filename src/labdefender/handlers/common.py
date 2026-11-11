@@ -1,4 +1,4 @@
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from labdefender.db.models import User
 from labdefender.enums import Role
 from labdefender.handlers import registration
+from labdefender.handlers.notifications import Notifier, notify_student_joined
 from labdefender.keyboards.groups import student_group_keyboard
 from labdefender.keyboards.registration import role_keyboard
 from labdefender.services.groups import join_group, parse_invite_payload
@@ -22,12 +23,18 @@ def create_router() -> Router:
         current_user: User,
         state: FSMContext,
         session: AsyncSession,
+        bot: Bot,
+        notifier: Notifier,
     ) -> None:
         await state.clear()
         if command.args:
             result = await join_group(
                 session, actor_id=current_user.id, invite_token=parse_invite_payload(command.args)
             )
+            if result.joined:
+                await notify_student_joined(
+                    notifier, bot, session, group_id=result.group.id, student_id=current_user.id
+                )
             title = "Вы присоединились к группе" if result.joined else "Вы уже в группе"
             await message.answer(
                 f"{title} «{result.group.name}».\nВаши группы: /my_groups",
@@ -61,6 +68,7 @@ def create_router() -> Router:
             "\n/cancel — отменить текущий ввод"
             "\n/my_groups — мои группы"
             "\n/queue — защита и очередь"
+            "\n/notifications — уведомления"
             f"{teacher_help}{admin_help}"
         )
 

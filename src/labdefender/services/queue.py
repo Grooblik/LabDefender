@@ -5,7 +5,14 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from labdefender.db.models import DefenseSlot, QueueEntry, Submission, User
+from labdefender.db.models import (
+    Assignment,
+    DefenseSlot,
+    QueueEntry,
+    StudyGroup,
+    Submission,
+    User,
+)
 from labdefender.db.transactions import immediate_transaction
 from labdefender.enums import Role, SubmissionStatus
 from labdefender.services.access import (
@@ -114,14 +121,23 @@ async def close_defense_slot(session: AsyncSession, *, actor_id: int, slot_id: i
     return slot
 
 
-async def reopen_defense_slot(session: AsyncSession, *, actor_id: int, slot_id: int) -> DefenseSlot:
+@dataclass(frozen=True)
+class ReopenSlotResult:
+    slot: DefenseSlot
+    reopened: bool  # False when the slot was already open: nothing changed.
+
+
+async def reopen_defense_slot(
+    session: AsyncSession, *, actor_id: int, slot_id: int
+) -> ReopenSlotResult:
     async with immediate_transaction(session):
         await require_user(session, actor_id=actor_id, role=Role.TEACHER)
         slot = await require_defense_slot_access(session, actor_id=actor_id, slot_id=slot_id)
         if slot_end_at(slot.date, slot.end_time) <= now_moscow():
             raise DefenseSlotClosed()
+        reopened = not slot.is_open
         slot.is_open = True
-    return slot
+    return ReopenSlotResult(slot=slot, reopened=reopened)
 
 
 async def cancel_defense_slot(session: AsyncSession, *, actor_id: int, slot_id: int) -> DefenseSlot:
@@ -135,6 +151,46 @@ async def cancel_defense_slot(session: AsyncSession, *, actor_id: int, slot_id: 
             raise DefenseSlotNotEmpty()
         await session.delete(slot)
     return slot
+
+
+async def list_slots_between(
+    session: AsyncSession, *, actor_id: int, assignment_id: int, first_day: date, last_day: date
+) -> tuple[DefenseSlot, ...]:
+    """Teacher-only read of an assignment's slots in a date range, for the slot wizard."""
+    await require_user(session, actor_id=actor_id, role=Role.TEACHER)
+    await require_assignment_access(session, actor_id=actor_id, assignment_id=assignment_id)
+    slots = await session.scalars(
+        select(DefenseSlot)
+        .where(
+            DefenseSlot.assignment_id == assignment_id,
+            DefenseSlot.date >= first_day,
+            DefenseSlot.date <= last_day,
+        )
+        .order_by(DefenseSlot.date, DefenseSlot.start_time, DefenseSlot.id)
+    )
+    return tuple(slots)
+
+
+async def latest_slot_template(
+    session: AsyncSession, *, actor_id: int, assignment_id: int
+) -> DefenseSlot | None:
+    """The teacher's most relevant previous slot: same assignment, then same group, then any."""
+    await require_user(session, actor_id=actor_id, role=Role.TEACHER)
+    assignment = await require_assignment_access(
+        session, actor_id=actor_id, assignment_id=assignment_id
+    )
+    return await session.scalar(
+        select(DefenseSlot)
+        .join(Assignment, Assignment.id == DefenseSlot.assignment_id)
+        .join(StudyGroup, StudyGroup.id == Assignment.group_id)
+        .where(StudyGroup.teacher_id == actor_id)
+        .order_by(
+            (DefenseSlot.assignment_id == assignment.id).desc(),
+            (Assignment.group_id == assignment.group_id).desc(),
+            DefenseSlot.id.desc(),
+        )
+        .limit(1)
+    )
 
 
 async def require_approved(
@@ -389,12 +445,8 @@ async def get_slot_queue(
     )
 
 
-async def list_approved_unassigned(
-    session: AsyncSession, *, actor_id: int, assignment_id: int, offset: int = 0
-) -> Page[SubmissionItem]:
-    validate_offset(offset)
-    await require_user(session, actor_id=actor_id, role=Role.TEACHER)
-    await require_assignment_access(session, actor_id=actor_id, assignment_id=assignment_id)
+def approved_unassigned_query(assignment_id: int, *columns):
+    """Students whose latest attempt is approved and who have no queue entry yet."""
     latest_attempts = (
         select(
             Submission.student_id,
@@ -404,8 +456,9 @@ async def list_approved_unassigned(
         .group_by(Submission.student_id)
         .subquery()
     )
-    query = (
-        select(Submission, User.full_name)
+    return (
+        select(*columns)
+        .select_from(Submission)
         .join(
             latest_attempts,
             and_(
@@ -421,6 +474,15 @@ async def list_approved_unassigned(
             QueueEntry.id.is_(None),
         )
     )
+
+
+async def list_approved_unassigned(
+    session: AsyncSession, *, actor_id: int, assignment_id: int, offset: int = 0
+) -> Page[SubmissionItem]:
+    validate_offset(offset)
+    await require_user(session, actor_id=actor_id, role=Role.TEACHER)
+    await require_assignment_access(session, actor_id=actor_id, assignment_id=assignment_id)
+    query = approved_unassigned_query(assignment_id, Submission, User.full_name)
     rows = (
         await session.execute(
             query.order_by(Submission.approved_at, Submission.id)

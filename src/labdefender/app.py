@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from labdefender.config import Settings
 from labdefender.db.session import create_database, initialize_database
-from labdefender.handlers import common, student, teacher
+from labdefender.handlers import common, notifications, student, teacher
+from labdefender.handlers.notifications import Notifier
 from labdefender.local import database_path, instance_locks
 from labdefender.middlewares.database import DatabaseMiddleware
 from labdefender.middlewares.domain_errors import DomainErrorMiddleware
@@ -20,14 +21,25 @@ logger = logging.getLogger(__name__)
 
 
 def create_dispatcher(
-    session_factory: async_sessionmaker[AsyncSession], *, settings: Settings | None = None
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    settings: Settings | None = None,
+    notifier: Notifier | None = None,
 ) -> Dispatcher:
+    # Without an explicit notifier, notices are delivered inline: deterministic for tests.
+    notifier = notifier or Notifier()
     dispatcher = Dispatcher(
         storage=MemoryStorage(),
         events_isolation=SimpleEventIsolation(),
         registration_code=settings.teacher_registration_code if settings else SecretStr(""),
         admin_ids=settings.admin_ids if settings else frozenset(),
+        notifier=notifier,
     )
+
+    async def finish_notifications() -> None:
+        await notifier.close()
+
+    dispatcher.shutdown.register(finish_notifications)
     private = Router(name="private")
     # Ignore group messages and inline-mode callbacks in this MVP.
     private.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -37,7 +49,11 @@ def create_dispatcher(
     private.message.outer_middleware(DomainErrorMiddleware())
     private.callback_query.outer_middleware(DomainErrorMiddleware())
     private.include_routers(
-        common.create_router(), student.create_router(), teacher.create_router()
+        common.create_router(),
+        student.create_router(),
+        teacher.create_router(),
+        # Both roles: /notifications and the teacher's notification switches.
+        notifications.create_router(),
     )
 
     fallback = Router(name="fallback")
@@ -68,7 +84,12 @@ async def _run(settings: Settings, path: Path) -> None:
     )
     try:
         await initialize_database(engine)
-        dispatcher = create_dispatcher(session_factory, settings=settings)
+        dispatcher = create_dispatcher(
+            session_factory,
+            settings=settings,
+            # Background delivery: the acting user does not wait for a broadcast.
+            notifier=Notifier(background=True, delay=0.05),
+        )
         # Never log settings or the bot token. Bot owns and closes its HTTP session.
         async with Bot(token=settings.bot_token.get_secret_value()) as bot:
             await bot.set_my_commands(
@@ -86,6 +107,7 @@ async def _run(settings: Settings, path: Path) -> None:
                     BotCommand(command="assignments", description="Задания студента"),
                     BotCommand(command="new_slot", description="Открыть слот защиты"),
                     BotCommand(command="queue", description="Защита и очередь"),
+                    BotCommand(command="notifications", description="Уведомления"),
                 ]
             )
             logger.info("Starting polling")

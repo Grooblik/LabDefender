@@ -7,12 +7,14 @@ from labdefender.db.models.domain import (
     StudyGroup,
     Submission,
 )
+from labdefender.db.models.notifications import NotificationSetting
 from labdefender.db.models.user import User
 
 __all__ = [
     "Assignment",
     "DefenseSlot",
     "Membership",
+    "NotificationSetting",
     "QueueEntry",
     "StudyGroup",
     "Submission",

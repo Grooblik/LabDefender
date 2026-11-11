@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -16,6 +16,7 @@ from labdefender.handlers.defense import (
     show_student_booking,
     slot_time_label,
 )
+from labdefender.handlers.notifications import Notifier, notify_queue_booking
 from labdefender.keyboards.defense import (
     StudentQueueCallback,
     StudentQueueDraftCallback,
@@ -153,6 +154,8 @@ def create_router() -> Router:
         session: AsyncSession,
         current_user: User,
         state: FSMContext,
+        bot: Bot,
+        notifier: Notifier,
     ) -> None:
         if not isinstance(callback.message, Message):
             raise StaleCourseAction()
@@ -166,8 +169,9 @@ def create_router() -> Router:
             )
         else:
             expected_order = datetime.fromisoformat(data["order_at"]) if data["order_at"] else None
+            entry = None
             if data["operation"] == "enroll":
-                await enroll_slot(
+                entry = await enroll_slot(
                     session,
                     actor_id=current_user.id,
                     assignment_id=data["assignment_id"],
@@ -184,6 +188,17 @@ def create_router() -> Router:
                     expected_order_at=expected_order,
                 )
             await state.clear()
+            # A repeated enrollment into the current slot changes nothing and is not announced.
+            if entry is not None and (
+                entry.id != data["entry_id"] or entry.order_at != expected_order
+            ):
+                await notify_queue_booking(
+                    notifier,
+                    bot,
+                    session,
+                    entry_id=entry.id,
+                    switched=data["entry_id"] is not None,
+                )
             await callback.message.answer("Запись в очереди сохранена.")
             await show_student_booking(
                 callback.message, session, current_user, assignment_id=data["assignment_id"]

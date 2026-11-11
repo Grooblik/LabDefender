@@ -4,7 +4,14 @@ from datetime import UTC, datetime
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, GetMe, SendDocument, SendMessage
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    DeleteMessage,
+    EditMessageText,
+    GetMe,
+    SendDocument,
+    SendMessage,
+)
 from aiogram.types import Chat, Document, Message, User
 
 from labdefender.db.session import create_database, initialize_database
@@ -27,6 +34,13 @@ class RecordingSession(BaseSession):
         if isinstance(method, SendMessage):
             return Message(
                 message_id=len(self.calls),
+                date=datetime.now(UTC),
+                chat=Chat(id=int(method.chat_id), type="private"),
+                text=method.text,
+            )
+        if isinstance(method, EditMessageText):
+            return Message(
+                message_id=method.message_id,
                 date=datetime.now(UTC),
                 chat=Chat(id=int(method.chat_id), type="private"),
                 text=method.text,
