@@ -10,9 +10,11 @@ from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from labdefender.config import Settings
+from labdefender.db.models import User
 from labdefender.db.session import create_database, initialize_database
 from labdefender.handlers import common, notifications, student, teacher
 from labdefender.handlers.notifications import Notifier
+from labdefender.keyboards.menu import MenuButton, main_menu
 from labdefender.local import database_path, instance_locks
 from labdefender.middlewares.database import DatabaseMiddleware
 from labdefender.middlewares.domain_errors import DomainErrorMiddleware
@@ -52,19 +54,24 @@ def create_dispatcher(
         common.create_router(),
         student.create_router(),
         teacher.create_router(),
-        # Both roles: /notifications and the teacher's notification switches.
+        # The teacher's notification switches; the screen itself opens from handlers.menu.
         notifications.create_router(),
     )
 
     fallback = Router(name="fallback")
 
     @fallback.message()
-    async def unknown_message(message: Message) -> None:
-        await message.answer("Команда не найдена или недоступна для вашей роли. Помощь: /help")
+    async def unknown_message(message: Message, current_user: User | None = None) -> None:
+        # Also restores the main menu for chats that never received it (e.g. after an update).
+        await message.answer(
+            "Команда не найдена или недоступна для вашей роли. "
+            f"Выберите раздел кнопками ниже или откройте «{MenuButton.HELP.value}».",
+            reply_markup=main_menu(current_user.role) if current_user else None,
+        )
 
     @fallback.callback_query()
     async def unknown_callback(callback: CallbackQuery) -> None:
-        await callback.answer("Кнопка недоступна. Откройте меню заново через /start.")
+        await callback.answer("Кнопка недоступна. Откройте раздел заново кнопкой меню.")
 
     private.include_router(fallback)
     dispatcher.include_router(private)

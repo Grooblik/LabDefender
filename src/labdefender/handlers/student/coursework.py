@@ -2,7 +2,6 @@ import secrets
 from dataclasses import asdict
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +25,7 @@ from labdefender.keyboards.coursework import (
     draft_keyboard,
     selection_keyboard,
 )
+from labdefender.keyboards.menu import cancel_keyboard
 from labdefender.services.assignments import get_assignment
 from labdefender.services.errors import InvalidSolution, StaleCourseAction, SubmissionConflict
 from labdefender.services.submissions import (
@@ -40,13 +40,6 @@ from labdefender.states.coursework import SolutionSubmission
 
 def create_router() -> Router:
     router = Router(name="student_coursework")
-
-    @router.message(Command("assignments"))
-    async def assignments(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_course_groups(message, session, current_user, mode="student")
 
     @router.callback_query(StudentCourseCallback.filter())
     async def course_action(
@@ -91,7 +84,8 @@ def create_router() -> Router:
             await state.set_state(SolutionSubmission.payload)
             await callback.message.answer(
                 f"Задание: {assignment.title}\n"
-                "Отправьте один PDF/ZIP до 20 МиБ, текст или ссылку HTTP(S). Отмена: /cancel."
+                "Отправьте один PDF/ZIP до 20 МиБ, текст или ссылку HTTP(S).",
+                reply_markup=cancel_keyboard(),
             )
         elif action == "history":
             await show_submissions(

@@ -1,13 +1,13 @@
 import secrets
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
 from labdefender.enums import Role
+from labdefender.handlers.coursework import answer_no_groups
 from labdefender.keyboards.groups import (
     GroupCreationCallback,
     TeacherGroupCallback,
@@ -15,6 +15,7 @@ from labdefender.keyboards.groups import (
     group_list_keyboard,
     teacher_group_keyboard,
 )
+from labdefender.keyboards.menu import cancel_keyboard
 from labdefender.services.errors import StaleGroupAction
 from labdefender.services.groups import (
     create_group,
@@ -36,7 +37,7 @@ async def show_groups(
 ) -> None:
     page = await list_groups(session, actor_id=current_user.id, offset=offset)
     if not page.groups and offset == 0:
-        await message.answer("У вас пока нет групп. Создайте первую через /create_group.")
+        await answer_no_groups(message, current_user)
         return
     title = "Выберите группу для приглашения:" if invite else "Ваши группы:"
     if not page.groups:
@@ -61,28 +62,16 @@ async def show_invite(
     )
 
 
+async def start_group_creation(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(GroupCreation.waiting_for_name)
+    await message.answer(
+        "Введите название группы (до 128 символов).", reply_markup=cancel_keyboard()
+    )
+
+
 def create_router() -> Router:
     router = Router(name="teacher_groups")
-
-    @router.message(Command("create_group"))
-    async def begin_creation(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await state.set_state(GroupCreation.waiting_for_name)
-        await message.answer("Введите название группы (до 128 символов). Для отмены: /cancel.")
-
-    @router.message(Command("my_groups"))
-    async def my_groups(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_groups(message, session, current_user)
-
-    @router.message(Command("invite"))
-    async def invite_groups(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_groups(message, session, current_user, invite=True)
 
     @router.callback_query(TeacherGroupCallback.filter())
     async def group_action(
@@ -94,7 +83,7 @@ def create_router() -> Router:
         bot: Bot,
     ) -> None:
         if not isinstance(callback.message, Message):
-            await callback.answer("Откройте список заново через /my_groups.")
+            await callback.answer("Откройте список заново: «👥 Мои группы».")
             return
         await state.clear()
         action, value = callback_data.action, callback_data.value
@@ -108,6 +97,8 @@ def create_router() -> Router:
             )
         elif action == "invite":
             await show_invite(callback.message, session, current_user, bot, group_id=value)
+        elif action == "create":
+            await start_group_creation(callback.message, state)
         else:
             group = await get_group(session, actor_id=current_user.id, group_id=value)
             await callback.message.answer(
@@ -127,7 +118,10 @@ def create_router() -> Router:
 
     @router.message(GroupCreation.waiting_for_name, ~F.text)
     async def name_requires_text(message: Message) -> None:
-        await message.answer("Отправьте название группы текстом или отмените ввод: /cancel.")
+        await message.answer(
+            "Отправьте название группы текстом или нажмите «Отмена».",
+            reply_markup=cancel_keyboard(),
+        )
 
     @router.callback_query(GroupCreationCallback.filter())
     async def confirm_creation(

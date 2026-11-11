@@ -100,7 +100,7 @@ async def test_teacher_learns_about_new_member_once(context, bot):
     [notice] = sent(bot, TEACHER)
     assert notice.text == "Новый студент в группе «ИВТ-101»: User405.\nВсего студентов: 4."
     assert labels(notice) == ["Открыть группу", "🔕 Не присылать такие"]
-    assert "Вы уже в группе" in sent(bot, 405)[-1].text
+    assert "Вы уже в группе" in sent(bot, 405)[-2].text
 
 
 async def test_submission_notice_and_mute_from_notice_and_settings(context, bot):

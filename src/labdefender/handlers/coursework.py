@@ -11,6 +11,7 @@ from labdefender.keyboards.coursework import (
     selection_keyboard,
 )
 from labdefender.keyboards.defense import StudentQueueCallback, TeacherQueueCallback
+from labdefender.keyboards.groups import create_group_button
 from labdefender.services.assignments import get_assignment, list_assignments
 from labdefender.services.errors import SolutionDeliveryUnavailable, StaleCourseAction
 from labdefender.services.groups import get_group, list_groups
@@ -59,6 +60,18 @@ async def send_text(
         )
 
 
+async def answer_no_groups(message: Message, user: User) -> None:
+    if user.role == Role.TEACHER:
+        await message.answer(
+            "У вас пока нет групп. Создайте первую кнопкой ниже.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[create_group_button()]]),
+        )
+    else:
+        await message.answer(
+            "Вы пока не состоите в группах. Откройте ссылку-приглашение преподавателя."
+        )
+
+
 async def require_draft(state: FSMContext, *, expected_state: str, nonce: str) -> dict:
     data = await state.get_data()
     if await state.get_state() != expected_state or data.get("nonce") != nonce:
@@ -77,7 +90,7 @@ async def show_course_groups(
         ("groups_publish" if mode == "publish" else "groups_review") if teacher else "groups"
     )
     if not page.groups and not offset:
-        await message.answer("Нет доступных групп. Откройте /my_groups.")
+        await answer_no_groups(message, user)
         return
     await message.answer(
         "Выберите группу:",

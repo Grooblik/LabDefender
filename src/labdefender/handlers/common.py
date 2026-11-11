@@ -1,16 +1,52 @@
-from aiogram import Bot, Router
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram import Bot, F, Router
+from aiogram.filters import Command, CommandObject, CommandStart, or_f
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
 from labdefender.enums import Role
-from labdefender.handlers import registration
-from labdefender.handlers.notifications import Notifier, notify_student_joined
-from labdefender.keyboards.groups import student_group_keyboard
-from labdefender.keyboards.registration import role_keyboard
+from labdefender.handlers import menu, registration
+from labdefender.handlers.notifications import (
+    Notifier,
+    notify_student_joined,
+    show_notification_settings,
+)
+from labdefender.handlers.student.groups import show_student_group
+from labdefender.keyboards.menu import (
+    MenuButton,
+    MenuCallback,
+    help_keyboard,
+    main_menu,
+    menu_sections,
+)
 from labdefender.services.groups import join_group, parse_invite_payload
+
+CANCELLED = "Ввод отменён. Сохранённые данные не изменены."
+
+
+def help_text(user: User, *, admin: bool) -> str:
+    extra = (
+        ["/notifications — уведомления", "/teacher — получить доступ преподавателя"]
+        if user.role == Role.STUDENT
+        else ["/create_group — создать группу"]
+    )
+    if admin:
+        extra.append("/grant_teacher <telegram_id> — выдать роль преподавателя")
+    return "\n".join(
+        [
+            "LabDefender — сдача и защита лабораторных работ.",
+            "",
+            "Разделы открываются кнопками под полем ввода, действия — кнопками под "
+            "сообщениями бота. Те же разделы доступны командами:",
+            *menu_sections(user.role),
+            "",
+            "/start — главное меню",
+            "/cancel — отменить текущий ввод",
+            "/id — мой Telegram ID",
+            *extra,
+        ]
+    )
 
 
 def create_router() -> Router:
@@ -36,50 +72,64 @@ def create_router() -> Router:
                     notifier, bot, session, group_id=result.group.id, student_id=current_user.id
                 )
             title = "Вы присоединились к группе" if result.joined else "Вы уже в группе"
+            # The invite is often the first contact: show the menu, then the group itself.
             await message.answer(
-                f"{title} «{result.group.name}».\nВаши группы: /my_groups",
-                reply_markup=student_group_keyboard(result.group.id),
+                f"{title} «{result.group.name}».", reply_markup=main_menu(current_user.role)
             )
+            await show_student_group(message, session, current_user, group_id=result.group.id)
             return
-        role = "преподаватель" if current_user.role == Role.TEACHER else "студент"
+        teacher = current_user.role == Role.TEACHER
+        role = "преподаватель" if teacher else "студент"
         await message.answer(
             f"Добро пожаловать в LabDefender!\nВаша роль: {role}.\n"
-            "Ваши группы: /my_groups\nПомощь: /help",
-            reply_markup=role_keyboard() if current_user.role == Role.STUDENT else None,
+            "Разделы — на кнопках под полем ввода, действия — на кнопках под сообщениями. "
+            f"Справка: «{MenuButton.HELP.value}»."
+            + ("" if teacher else "\nВы преподаватель? «❓ Помощь» → «🎓 Я преподаватель»."),
+            reply_markup=main_menu(current_user.role),
         )
 
-    @router.message(Command("help"))
+    # Help keeps the current input: a code or a draft can be continued after reading it.
+    @router.message(or_f(Command("help"), F.text == MenuButton.HELP.value))
     async def help_command(message: Message, current_user: User, admin_ids: frozenset[int]) -> None:
-        teacher_help = (
-            "\n/teacher — получить доступ преподавателя\n/assignments — задания и статусы"
-            if current_user.role == Role.STUDENT
-            else "\n/create_group — создать группу\n/invite — пригласить студентов"
-            "\n/new_assignment — опубликовать задание\n/submissions — проверить решения"
-            "\n/new_slot — открыть слот защиты"
-        )
-        admin_help = (
-            "\n/grant_teacher <telegram_id> — выдать роль преподавателя"
-            if current_user.telegram_id in admin_ids
-            else ""
-        )
+        admin = current_user.telegram_id in admin_ids
         await message.answer(
-            "LabDefender — сдача и защита лабораторных работ.\n\n"
-            "/start — начать\n/help — помощь\n/id — мой Telegram ID"
-            "\n/cancel — отменить текущий ввод"
-            "\n/my_groups — мои группы"
-            "\n/queue — защита и очередь"
-            "\n/notifications — уведомления"
-            f"{teacher_help}{admin_help}"
+            help_text(current_user, admin=admin),
+            reply_markup=help_keyboard(current_user.role, admin=admin),
         )
 
     @router.message(Command("cancel"))
-    async def cancel(message: Message, state: FSMContext) -> None:
+    async def cancel(message: Message, state: FSMContext, current_user: User) -> None:
         await state.clear()
-        await message.answer("Ввод отменён. Сохранённые данные не изменены.\nПомощь: /help")
+        await message.answer(CANCELLED, reply_markup=main_menu(current_user.role))
 
     @router.message(Command("id"))
     async def my_id(message: Message, current_user: User) -> None:
         await message.answer(f"Ваш Telegram ID: {current_user.telegram_id}")
 
-    router.include_router(registration.create_router())
+    @router.callback_query(MenuCallback.filter(F.action == "cancel"))
+    async def cancel_button(callback: CallbackQuery, state: FSMContext, current_user: User) -> None:
+        if await state.get_state() is None:
+            await callback.answer("Сейчас нечего отменять.")
+            return
+        await state.clear()
+        if isinstance(callback.message, Message):
+            await callback.message.answer(CANCELLED, reply_markup=main_menu(current_user.role))
+        await callback.answer()
+
+    @router.callback_query(MenuCallback.filter(F.action == "id"))
+    async def id_button(callback: CallbackQuery, current_user: User) -> None:
+        if isinstance(callback.message, Message):
+            await callback.message.answer(f"Ваш Telegram ID: {current_user.telegram_id}")
+        await callback.answer()
+
+    @router.callback_query(MenuCallback.filter(F.action == "notifications"))
+    async def notifications_button(
+        callback: CallbackQuery, session: AsyncSession, current_user: User
+    ) -> None:
+        if isinstance(callback.message, Message):
+            await show_notification_settings(callback.message, session, current_user)
+        await callback.answer()
+
+    # Section buttons first: they must win over any text a dialogue step is waiting for.
+    router.include_routers(menu.create_router(), registration.create_router())
     return router

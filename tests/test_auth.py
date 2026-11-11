@@ -239,7 +239,14 @@ async def test_teacher_dialogue_deletes_code_and_does_not_store_or_echo_it(datab
     _, sessions = database
     dispatcher = create_dispatcher(sessions, settings=settings())
     await dispatcher.feed_update(bot, message_update("/start"))
-    assert bot.session.calls[-1].reply_markup.inline_keyboard[1][0].callback_data == "auth:teacher"
+    assert "«🎓 Я преподаватель»" in texts(bot)[-1]
+    await dispatcher.feed_update(bot, message_update("❓ Помощь"))
+    buttons = {
+        button.text: button.callback_data
+        for row in bot.session.calls[-1].reply_markup.inline_keyboard
+        for button in row
+    }
+    assert buttons["🎓 Я преподаватель"] == "auth:teacher"
     await dispatcher.feed_update(bot, callback_update("auth:teacher"))
     await dispatcher.feed_update(bot, message_update(CODE))
     assert any(isinstance(call, DeleteMessage) for call in bot.session.calls)

@@ -17,8 +17,6 @@ from dataclasses import dataclass
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -363,24 +361,22 @@ async def notify_queue_booking(
     )
 
 
-def create_router() -> Router:
-    router = Router(name="notifications")
-
-    @router.message(Command("notifications"))
-    async def notifications(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        if current_user.role != Role.TEACHER:
-            await message.answer(
-                "Студентам уведомления приходят всегда: новые задания, результат проверки "
-                "и новые слоты защиты. Отключить их нельзя."
-            )
-            return
-        preferences = await get_notification_preferences(session, actor_id=current_user.id)
+async def show_notification_settings(
+    message: Message, session: AsyncSession, current_user: User
+) -> None:
+    if current_user.role != Role.TEACHER:
         await message.answer(
-            settings_text(preferences), reply_markup=settings_keyboard(preferences)
+            "Студентам уведомления приходят всегда: новые задания, результат проверки "
+            "и новые слоты защиты. Отключить их нельзя."
         )
+        return
+    preferences = await get_notification_preferences(session, actor_id=current_user.id)
+    await message.answer(settings_text(preferences), reply_markup=settings_keyboard(preferences))
+
+
+def create_router() -> Router:
+    # The /notifications screen itself is opened from handlers.menu.
+    router = Router(name="notifications")
 
     @router.callback_query(TeacherNotifyCallback.filter())
     async def switch(
@@ -403,7 +399,7 @@ def create_router() -> Router:
         if callback_data.source == "notice":
             label = CATEGORY_LABELS[categories[0]]
             await callback.answer(
-                f"Уведомления «{label}» выключены. Включить снова: /notifications",
+                f"Уведомления «{label}» выключены. Включить снова: «🔔 Уведомления».",
                 show_alert=True,
             )
             return

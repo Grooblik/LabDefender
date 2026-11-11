@@ -3,8 +3,8 @@
 ## Что уже доступно
 
 - `labdefender.app.create_dispatcher(session_factory, settings=settings, notifier=...)`
-  подключает общий роутер с регистрацией, затем студента, преподавателя, роутер
-  уведомлений и последним fallback. Без `settings` фабрика тоже работает, но регистрация
+  подключает общий роутер (внутри — сначала меню разделов, затем регистрация),
+  затем студента, преподавателя, роутер уведомлений и последним fallback. Без `settings` фабрика тоже работает, но регистрация
   по коду и админ-доступ отключены — это удобно для изолированных тестов. Без `notifier`
   уведомления отправляются сразу внутри обработчика (детерминированно для тестов);
   `run()` передаёт `Notifier(background=True, delay=0.05)`.
@@ -15,24 +15,31 @@
 - `current_user.id` — внутренний PK. `current_user.telegram_id` — ID Telegram;
   внешние ключи моделей ссылаются именно на внутренний PK.
 - `RoleFilter` подключён к `message` и `callback_query` каждого ролевого роутера.
-- `/my_groups` работает для обеих ролей; `/create_group` и `/invite` — у преподавателя.
+- Всё управление доступно кнопками: постоянное меню роли (`ReplyKeyboardMarkup`)
+  под полем ввода и inline-кнопки под сообщениями. Каждая кнопка меню открывает тот же
+  экран, что и команда; команды по-прежнему работают. Подробности — «Меню и кнопки».
+- «👥 Мои группы» (`/my_groups`) работает для обеих ролей; «➕ Создать группу»
+  (`/create_group`) и «🔗 Пригласить» (`/invite`) — у преподавателя.
   Общий `/start join_<token>` регистрирует участие студента, включая первый вход.
-- `/new_assignment` и `/submissions` работают у преподавателя, `/assignments` —
-  у студента. Кнопки заданий и проверки уже подключены к карточкам групп.
-- `/new_slot` создаёт слот защиты для задания через мастер с кнопками (календарь,
-  сетка времени, длительность, места, повтор прошлого слота) или ручной текстовый ввод.
-  `/queue` работает для обеих ролей, переход студента к записи также есть в карточке
-  допущенного задания.
+- «📝 Новое задание» (`/new_assignment`) и «📥 На проверку» (`/submissions`) работают
+  у преподавателя, «📚 Задания» (`/assignments`) — у студента. Кнопки заданий, проверки
+  и очереди подключены к карточкам групп.
+- «🕒 Новый слот» (`/new_slot`) создаёт слот защиты для задания через мастер с кнопками
+  (календарь, сетка времени, длительность, места, повтор прошлого слота) или ручной
+  текстовый ввод. «🗓 Защита и очередь» (`/queue`) работает для обеих ролей, переход
+  студента к записи также есть в карточке допущенного задания.
 - Новая Telegram-учётка автоматически сохраняется как `student`; кнопка
-  «Я преподаватель» и `/teacher` начинают проверку кода. Смена имени не сбрасывает роль.
+  «🎓 Я преподаватель» в помощи и `/teacher` начинают проверку кода. Смена имени
+  не сбрасывает роль.
 - `TEACHER_REGISTRATION_CODE` задаётся в `.env`, `ADMIN_IDS` — JSON-массив Telegram ID.
-  Админ-команда `/grant_teacher <telegram_id>` назначает роль зарегистрированному
-  пользователю; админ-права не зависят от учебной роли.
+  Кнопка «👤 Выдать роль преподавателя» в помощи (или `/grant_teacher` без аргумента)
+  запрашивает Telegram ID, `/grant_teacher <telegram_id>` назначает роль сразу;
+  пользователь должен быть зарегистрирован. Админ-права не зависят от учебной роли.
 - Роли: `Role.STUDENT`, `Role.TEACHER`. Статусы: `PENDING`, `RETURNED`, `APPROVED`.
   В БД сохраняются строковые значения в нижнем регистре из общих enum-ов.
 - Уведомления второй стороне подключены к сдаче, проверке, публикации, вступлению,
-  созданию и повторному открытию слота, записи и смене слота. `/notifications`
-  работает для обеих ролей: преподаватель управляет категориями, студент видит,
+  созданию и повторному открытию слота, записи и смене слота. «🔔 Уведомления»
+  (`/notifications`) работает для обеих ролей: преподаватель управляет категориями, студент видит,
   что его уведомления не отключаются. Контракт — в разделе «Уведомления».
 
 ## Где писать
@@ -42,46 +49,59 @@
 `states/teacher.py` либо одноимённые подпапки по мере роста.
 
 Общие файлы `app.py`, `config.py`, `enums.py`, `db/`, `middlewares/`,
-`handlers/common.py`, `handlers/notifications.py`, `services/users.py`,
+`handlers/common.py`, `handlers/menu.py`, `handlers/registration.py`,
+`handlers/notifications.py`, `keyboards/menu.py`, `services/users.py`,
 `services/notifications.py` меняет автор ядра. Изменения схемы сначала
 согласовываем: иначе разработчики получат несовместимые локальные SQLite-базы.
 Остальные сервисы закрепляем за одним человеком на этапе реализации.
 
-Пример нового файла `handlers/student/assignments.py`:
+Ролевой модуль держит callback и шаги ввода, а **вход в раздел** (кнопка меню и её
+команда) регистрируется в ядре, в `handlers/menu.py`. Пример нового файла
+`handlers/student/reports.py`:
 
 ```python
 from aiogram import Router
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
+from labdefender.keyboards.student import ReportCallback  # CallbackData, prefix="student"
+
+
+async def show_reports(message: Message, session: AsyncSession, current_user: User) -> None:
+    # Здесь вызвать общий сервис с current_user.id: он сам ограничивает доступ.
+    await message.answer("Пока нет отчётов.")
 
 
 def create_router() -> Router:
-    router = Router(name="student_assignments")
+    router = Router(name="student_reports")
 
-    @router.message(Command("assignments"))
-    async def assignments(message: Message, session: AsyncSession, current_user: User) -> None:
-        # Здесь вызвать общий сервис списка заданий с current_user.id.
-        # Сервис должен ограничить результат группами текущего студента.
-        await message.answer("Пока нет доступных заданий.")
+    @router.callback_query(ReportCallback.filter())
+    async def report_action(callback: CallbackQuery) -> None:
+        await callback.answer()
 
     return router
 ```
 
 В `handlers/student/__init__.py` импортируем модуль и внутри `create_router()`
-перед `return router` вызываем `router.include_router(assignments.create_router())`.
+перед `return router` вызываем `router.include_router(reports.create_router())`.
 У преподавателя — аналогично. Фабрики создают новые роутеры при каждом запуске,
 что позволяет собирать Dispatcher в тестах. Не создаём второго Dispatcher или Bot
-внутри модуля.
+внутри модуля. Новый раздел меню согласуем с автором ядра: текст в `MenuButton`,
+место в `MENU_LAYOUT`, команда в `MENU_COMMANDS` и обработчик в `handlers/menu.py`
+(`entry(MenuButton.X, "command")`, `state.clear()`, вызов `show_reports`).
 
-Сначала регистрируем точные команды и callback, затем обработчики ввода с фильтром
+Сначала регистрируем точные callback, затем обработчики ввода с фильтром
 конкретного FSM-состояния. Общий обработчик «любое сообщение» в ролевом модуле
-перехватит команды следующих роутеров. `/start`, `/help`, `/cancel` остаются общими.
+перехватит команды следующих роутеров. `/start`, `/help`, `/cancel` и все входы
+в разделы остаются общими: роутер меню стоит раньше ролевых, поэтому кнопка раздела
+никогда не попадёт в шаг ввода модуля. Под запросом текста ставим
+`reply_markup=cancel_keyboard()` из `keyboards/menu.py` — общая «Отмена», как `/cancel`.
+Текст ответа после завершения диалога без inline-кнопок может нести
+`main_menu(current_user.role)`, чтобы вернуть меню.
 Для callback используем префиксы `student:` / `teacher:` и `CallbackData`.
 На обработанную callback-кнопку всегда отвечаем через `callback.answer()`.
-Префикс `auth:` и `TeacherRegistration` заняты общим диалогом регистрации.
+Префиксы `auth:` и `menu:`, FSM `TeacherRegistration` и `TeacherGrant` заняты ядром.
 Код никогда не записываем в FSM и не включаем в сообщения или логи. Команды
 `/teacher` и `/grant_teacher` также принадлежат ядру.
 
@@ -89,8 +109,32 @@ def create_router() -> Router:
 `handlers/teacher/groups.py`. Их не нужно повторно регистрировать в другом модуле.
 Для будущих кнопок перехода к заданиям используйте ID группы из карточки и повторную
 проверку доступа в сервисе; не храните «текущую группу» как единственный источник прав.
-Пространства callback `student:groups:...`, `teacher:groups:...` и
-`teacher:create_group:...`, а также FSM `GroupCreation` заняты модулем групп.
+Пространства callback `student:groups:...`, `teacher:groups:...` (включая
+`teacher:groups:create:0` — «➕ Создать группу») и `teacher:create_group:...`,
+а также FSM `GroupCreation` заняты модулем групп.
+
+## Меню и кнопки
+
+- `keyboards/menu.py`: `MenuButton` — тексты кнопок меню; `MENU_LAYOUT[role]` — раскладка
+  по ролям; `MENU_COMMANDS` — команда каждой кнопки; `main_menu(role)` — постоянная
+  клавиатура (`is_persistent`, `resize_keyboard`); `menu_sections(role)` — строки
+  «кнопка — команда» для помощи; `cancel_keyboard()` — общая «Отмена» (`menu:cancel`);
+  `help_keyboard(role, admin=...)` — кнопки под помощью: `menu:id`,
+  `menu:notifications`, `auth:teacher`, «➕ Создать группу», `menu:grant`.
+- `handlers/menu.py`: входы в разделы. Каждый обработчик ловит и команду, и текст
+  кнопки (`entry`), очищает FSM и вызывает готовый `show_*`. Кнопка чужой роли
+  отвечает «Этот раздел недоступен для вашей роли. Меню обновлено» и присылает
+  `main_menu` текущей роли. Роутер включён в общий **до** регистрации, поэтому
+  кнопка во время ввода кода не тратит попытку.
+- `handlers/common.py`: `/start` и вход по приглашению присылают `main_menu`;
+  `/help` и «❓ Помощь» показывают пары «кнопка — команда» и `help_keyboard`, FSM
+  не трогают; `/cancel` и `menu:cancel` очищают FSM и присылают меню (если ввода нет,
+  кнопка отвечает «Сейчас нечего отменять»); `menu:id` и `menu:notifications`.
+- `handlers/registration.py`: после успешного кода приходит меню преподавателя;
+  `menu:grant` и `/grant_teacher` без аргумента ставят `TeacherGrant.waiting_for_id`.
+- Fallback отвечает на непонятный текст меню роли, на неизвестную кнопку — alert.
+- Пустые списки групп — общий `answer_no_groups(message, user)` из
+  `handlers/coursework.py`: преподавателю с кнопкой «➕ Создать группу».
 
 ## Готовые сервисы групп
 
@@ -342,13 +386,15 @@ commit: повтор доставки кнопки не переносит за�
 
 ## Уведомления: готовый контракт
 
-Доставка, тексты и `/notifications` — в `handlers/notifications.py`; кнопки и тексты
+Доставка, тексты и экран настроек `show_notification_settings(message, session, user)`
+— в `handlers/notifications.py`; вход в экран («🔔 Уведомления», `/notifications`,
+`menu:notifications`) — в `handlers/menu.py` и `handlers/common.py`; кнопки и тексты
 настроек — в `keyboards/notifications.py`. Зарезервированы команда `/notifications`
 и callback `teacher:notify:<category>:<enabled>:<source>`, где `category` —
 `submissions`, `joins`, `queue` или `all`, `source` — `notice` (кнопка «🔕» под
-уведомлением, ответ alert-ом) или `settings` (экран `/notifications`, сообщение
-редактируется). Роутер уведомлений подключён после ролевых и без `RoleFilter`:
-право менять настройки проверяет сервис.
+уведомлением, ответ alert-ом) или `settings` (экран настроек, сообщение
+редактируется). Роутер уведомлений (только переключатели) подключён после ролевых
+и без `RoleFilter`: право менять настройки проверяет сервис.
 
 `Notifier` передаётся в обработчики аргументом `notifier`, бот — аргументом `bot`.
 Готовые функции вызываются **после** успешного сервиса и `state.clear()`, но **до**
@@ -443,8 +489,8 @@ erDiagram
 возвращают `True` при смене роли, `False`, если она уже выдана, либо доменную ошибку.
 Они принимают внутренний `actor_id`; `grant_teacher` дополнительно получает
 `target_telegram_id` и `admin_ids` из настроек. Также готовы `services.groups`,
-`services.queue`, `services.notifications` с `handlers.notifications` и описанные выше
-ролевые обработчики. Локальный запуск, резервирование, backup/restore и команда
+`services.queue`, `services.notifications` с `handlers.notifications`, меню ролей
+с кнопками (`keyboards.menu`, `handlers.menu`) и описанные выше ролевые обработчики. Локальный запуск, резервирование, backup/restore и команда
 `migrate` также готовы.
 
 Все функции получают `session` и ID действующего пользователя; идентификаторы
