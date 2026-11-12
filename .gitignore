@@ -15,6 +15,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!/src/labdefender/web/static/lib/
 lib64/
 parts/
 sdist/

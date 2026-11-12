@@ -1,6 +1,6 @@
-# Подключение модулей
+# Устройство и контракты модулей
 
-## Что уже доступно
+## Точки входа
 
 - `labdefender.app.create_dispatcher(session_factory, settings=settings, notifier=...)`
   подключает общий роутер (внутри — сначала меню разделов, затем регистрация),
@@ -10,7 +10,7 @@
   `run()` передаёт `Notifier(background=True, delay=0.05, webapp_url=...)`.
 - Обработчики работают в личном чате. Групповые сообщения и inline-mode callbacks
   не входят в MVP.
-- Mini App, этапы 0–6: `run()` при заданном `WEBAPP_URL` (или запуске с `--tunnel`)
+- Для Mini App `run()` при заданном `WEBAPP_URL` (или запуске с `--tunnel`)
   поднимает в том же процессе веб-сервер `labdefender.web` с общими `Notifier`
   и FSM-хранилищем бота, ставит кнопку «Приложение» и проверяет, что публичный адрес
   ведёт в этот процесс; `/start`, `/app`, помощь и уведомления дают кнопки с текущим
@@ -55,7 +55,7 @@
   (`/notifications`) работает для обеих ролей: преподаватель управляет категориями, студент видит,
   что его уведомления не отключаются. Контракт — в разделе «Уведомления».
 
-## Где писать
+## Структура обработчиков
 
 У каждого ролевого модуля своя папка в `handlers/`. Кнопки и состояния кладём
 в `keyboards/student.py`, `keyboards/teacher.py`, `states/student.py`,
@@ -64,45 +64,19 @@
 Общие файлы `app.py`, `config.py`, `enums.py`, `db/`, `middlewares/`,
 `handlers/common.py`, `handlers/menu.py`, `handlers/registration.py`,
 `handlers/notifications.py`, `keyboards/menu.py`, `services/users.py`,
-`services/notifications.py`, `web/`, `tunnel.py` меняет автор ядра. Изменения схемы сначала
-согласовываем: иначе разработчики получат несовместимые локальные SQLite-базы.
-Остальные сервисы закрепляем за одним человеком на этапе реализации.
+`services/notifications.py`, `web/` и `tunnel.py` обслуживают обе роли. Изменения
+схемы требуют миграции для совместимости с существующими SQLite-базами.
 
-Ролевой модуль держит callback и шаги ввода, а **вход в раздел** (кнопка меню и её
-команда) регистрируется в ядре, в `handlers/menu.py`. Пример нового файла
-`handlers/student/reports.py`:
+Ролевой модуль обрабатывает callback и шаги ввода. Точки входа в раздел
+(кнопки и команды) регистрируются в `handlers/menu.py`. Например,
+`handlers/student/defense.py` создаёт роутер записи и очереди,
+а `handlers/student/__init__.py` подключает его через
+вызов `router.include_routers(..., defense.create_router())`. Фабрики создают отдельные
+роутеры для каждого экземпляра Dispatcher, в том числе в тестах.
 
-```python
-from aiogram import Router
-from aiogram.types import CallbackQuery, Message
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from labdefender.db.models import User
-from labdefender.keyboards.student import ReportCallback  # CallbackData, prefix="student"
-
-
-async def show_reports(message: Message, session: AsyncSession, current_user: User) -> None:
-    # Здесь вызвать общий сервис с current_user.id: он сам ограничивает доступ.
-    await message.answer("Пока нет отчётов.")
-
-
-def create_router() -> Router:
-    router = Router(name="student_reports")
-
-    @router.callback_query(ReportCallback.filter())
-    async def report_action(callback: CallbackQuery) -> None:
-        await callback.answer()
-
-    return router
-```
-
-В `handlers/student/__init__.py` импортируем модуль и внутри `create_router()`
-перед `return router` вызываем `router.include_router(reports.create_router())`.
-У преподавателя — аналогично. Фабрики создают новые роутеры при каждом запуске,
-что позволяет собирать Dispatcher в тестах. Не создаём второго Dispatcher или Bot
-внутри модуля. Новый раздел меню согласуем с автором ядра: текст в `MenuButton`,
-место в `MENU_LAYOUT`, команда в `MENU_COMMANDS` и обработчик в `handlers/menu.py`
-(`entry(MenuButton.X, "command")`, `state.clear()`, вызов `show_reports`).
+Чтобы добавить раздел меню, определите кнопку в `MenuButton`, расположение
+в `MENU_LAYOUT` и команду в `MENU_COMMANDS`. Зарегистрируйте обработчик
+в `handlers/menu.py` и очищайте состояние предыдущего диалога при входе.
 
 Сначала регистрируем точные callback, затем обработчики ввода с фильтром
 конкретного FSM-состояния. Общий обработчик «любое сообщение» в ролевом модуле
@@ -155,9 +129,8 @@ def create_router() -> Router:
 
 ## Mini App
 
-Готовы этапы 0–6: каркас, задания и сдача, проверка, группы, слоты и очередь обеих
-ролей, профиль, код преподавателя, выдача роли, настройки уведомлений, кнопки
-приложения под уведомлениями, постоянный туннель и проверка адреса. Устройство:
+Mini App открывает группы, задания, проверку, слоты и очередь обеих ролей, профиль
+и настройки уведомлений. Авторизация и маршруты устроены следующим образом.
 
 - `config.Settings`: `webapp_url` (публичный `https://` без параметров и `/` в конце;
   пусто — Mini App выключена), `web_host` (`127.0.0.1`), `web_port` (`8080`),
@@ -380,7 +353,7 @@ transaction-блока. Методы чтения commit не делают. Вс
 транзакция бизнес-операции не захватывает обновление Telegram-профиля. Чтение через
 SQLAlchemy само начинает транзакцию: не вызываем `session.begin()` после такого
 чтения без завершения предыдущей. В критичных операциях очередь сначала берёт
-блокировку, затем проверяет состояние и свободные места; реализация — этап 5.
+блокировку, затем проверяет состояние и свободные места.
 
 Успешный `RoleFilter` проверяет только роль. Сервис обязан проверять владельца
 группы/попытки, участие в группе и принадлежность слота заданию. Существование ID
@@ -643,7 +616,7 @@ commit: повтор доставки кнопки не переносит за�
   `approved_unbooked_students` — чтения для подготовки уведомления. Права не проверяют:
   вызываются только после авторизованного и сохранённого действия.
 
-## Общая схема после добавления форматов и слотов
+## Схема данных
 
 Модели импортируются из `labdefender.db.models`. Таблицы создаются при запуске.
 
@@ -695,7 +668,7 @@ erDiagram
     User ||--o| NotificationSetting : configures
 ```
 
-## Готовность общих сервисов
+## Общие сервисы
 
 Уже реализованы `services.users.ensure_user`, `services.auth.register_teacher`,
 `services.auth.grant_teacher`, проверки `services.access`, сервисы заданий
@@ -712,7 +685,7 @@ erDiagram
 объектов передаём явно. Сервисы не зависят от `Message`, `CallbackQuery` и FSM.
 Лимит файла — в общем сервисе, повторная проверка перед записью обязательна.
 
-## Проверка перед интеграцией
+## Локальные проверки
 
 Из корня репозитория после установки dev-зависимостей:
 
@@ -725,3 +698,16 @@ python -m ruff format --check .
 Тесты не используют настоящий токен и не обращаются в Telegram. Для ручного
 smoke-теста нужен свой бот из BotFather; не запускаем один токен одновременно
 на нескольких компьютерах.
+
+## Версия релиза
+
+Версия в Git-теге совпадает с `project.version` в `pyproject.toml`. Для первого
+релиза используйте `v0.1.0`. После слияния изменений и успешной проверки Ruff
+поставьте аннотированный тег на проверенный коммит в `main`.
+
+```sh
+git switch main
+git pull --ff-only origin main
+git tag -a v0.1.0 -m "LabDefender v0.1.0"
+git push origin v0.1.0
+```
