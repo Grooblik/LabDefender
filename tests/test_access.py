@@ -59,7 +59,7 @@ async def context(database):
             content="Private solution",
         )
         day = DefenseSlot(
-            assignment_id=assignment.id,
+            group_id=group.id,
             date=date(2026, 11, 13),
             start_time=time(14, 0),
             end_time=time(16, 0),

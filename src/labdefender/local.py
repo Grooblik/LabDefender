@@ -70,7 +70,15 @@ ADDITIVE_TABLES = frozenset(
 )
 
 
-def check_database(path: Path, *, allow_missing_tables: bool = False) -> tuple[str, ...]:
+# Tables whose older layout `tools migrate` converts (queue per assignment → per group).
+MIGRATED_TABLES = frozenset({"defense_slots", "queue_entries"})
+
+
+def check_database(
+    path: Path, *, allow_missing_tables: bool = False, allow_outdated: bool = False
+) -> tuple[str, ...]:
+    """Integrity, links and columns. `allow_outdated`: an older layout of the migrated tables
+    is accepted, so such a database can still be backed up before `tools migrate`."""
     path = path.resolve()
     if not path.is_file():
         raise LocalOperationError("Файл базы данных не найден.")
@@ -96,6 +104,8 @@ def check_database(path: Path, *, allow_missing_tables: bool = False) -> tuple[s
                     row[1] for row in connection.execute(f'PRAGMA table_info("{table.name}")')
                 }
                 if not set(table.columns.keys()) <= columns:
+                    if allow_outdated and table.name in MIGRATED_TABLES:
+                        continue
                     raise LocalOperationError(
                         f"Схема таблицы {table.name} устарела: отсутствуют нужные столбцы."
                     )
@@ -121,14 +131,15 @@ def reserve_database(path: Path) -> None:
 
 def backup_database(source: Path, destination: Path) -> Path:
     source, destination = source.resolve(), destination.resolve()
-    check_database(source)
+    # A copy is made as is: a database waiting for `tools migrate` is copied too.
+    check_database(source, allow_outdated=True)
     reserve_database(destination)
     try:
         # SQLite's online backup includes committed WAL contents; no raw file copy.
         with closing(sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)) as original:
             with closing(sqlite3.connect(destination)) as backup:
                 original.backup(backup, pages=128)
-        check_database(destination)
+        check_database(destination, allow_outdated=True)
     except BaseException:
         # This call exclusively created the destination; existing files are never removed.
         destination.unlink(missing_ok=True)

@@ -354,3 +354,54 @@ textarea {
 .stack > div:empty {
   display: none;
 }
+
+/* Report table: scrolls sideways, the student column stays in place. */
+.table-wrap {
+  overflow-x: auto;
+  margin: 12px 0;
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+table.report {
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.report th,
+.report td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--bg);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.report thead th {
+  max-width: 140px;
+  overflow: hidden;
+  color: var(--hint);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.report th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--card);
+  font-weight: 500;
+}
+
+.report td {
+  cursor: pointer;
+}
+
+.report .cell-approved {
+  color: var(--accent);
+}
+
+.report .cell-none {
+  color: var(--hint);
+}

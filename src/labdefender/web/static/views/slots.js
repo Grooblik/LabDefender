@@ -1,23 +1,18 @@
-// Teacher: group → assignment → slots and approved students without a booking → slot queue.
+// Teacher: group → its slots and approved works without a booking → slot queue.
+// A slot belongs to a group; each place in it is one work: student, assignment and attempt.
 import { api } from "../lib/api.js";
 import { button, failure, h, item, loading, mount, pagedList, section, title } from "../lib/dom.js";
 import { go, route } from "../lib/router.js";
 import { confirm, haptic } from "../lib/telegram.js";
-import {
-  firstPageThen,
-  pickAssignment,
-  pickGroup,
-  slotBadge,
-  slotLabel,
-  takeFlash,
-} from "./common.js";
+import { firstPageThen, pickGroup, slotBadge, slotLabel, takeFlash } from "./common.js";
 import { newSlotView } from "./new-slot.js";
 
 export function registerSlotRoutes(ctx) {
   route("/slots", (params, view) => groupsView(ctx, view));
-  route("/slots/g/:group", (params, view) => assignmentsView(ctx, view, params.group));
-  route("/slots/a/:assignment", (params, view) => assignmentView(ctx, view, params.assignment));
-  route("/slots/a/:assignment/new", (params, view) => newSlotView(ctx, view, params.assignment));
+  route("/slots/g/:group", (params, view) => groupSlotsView(ctx, view, params.group));
+  route("/slots/g/:group/new", (params, view) => newSlotView(ctx, view, params.group));
+  // Links made before slots belonged to groups name an assignment: open its group.
+  route("/slots/a/:assignment", (params, view) => assignmentRedirect(ctx, view, params.assignment));
   route("/slots/s/:slot", (params, view) => queueView(ctx, view, params.slot));
 }
 
@@ -29,37 +24,42 @@ function groupsView(ctx, view) {
   });
 }
 
-function assignmentsView(ctx, view, groupId) {
-  pickAssignment(ctx, view, groupId, {
-    back: () => go("/slots"),
-    open: (assignment) => `/slots/a/${assignment.id}`,
-    subtitle: (assignment) => `Формат сдачи: ${assignment.format_label}`,
-  });
+async function assignmentRedirect(ctx, view, assignmentId) {
+  mount(ctx.root, loading());
+  try {
+    const card = await api(`/assignments/${assignmentId}`);
+    if (view.alive()) go(`/slots/g/${card.group.id}`, { replace: true });
+  } catch (error) {
+    if (view.alive()) mount(ctx.root, failure(error, () => assignmentRedirect(ctx, view, assignmentId)));
+  }
 }
 
-async function assignmentView(ctx, view, assignmentId) {
+export function workLabel(work) {
+  return `${work.assignment_title} · попытка №${work.attempt_number}`;
+}
+
+async function groupSlotsView(ctx, view, groupId) {
   view.back(() => go("/slots"));
   const flash = takeFlash(ctx);
   mount(ctx.root, loading());
   let first;
   try {
-    first = await api(`/assignments/${assignmentId}/slots?offset=0`);
+    first = await api(`/groups/${groupId}/slots?offset=0`);
   } catch (error) {
-    if (view.alive()) mount(ctx.root, failure(error, () => assignmentView(ctx, view, assignmentId)));
+    if (view.alive()) mount(ctx.root, failure(error, () => groupSlotsView(ctx, view, groupId)));
     return;
   }
   if (!view.alive()) return;
-  const assignment = first.assignment;
-  view.back(() => go(`/slots/g/${assignment.group_id}`));
-  view.main("Новый слот", () => go(`/slots/a/${assignmentId}/new`));
+  view.main("Новый слот", () => go(`/slots/g/${groupId}/new`));
   mount(
     ctx.root,
-    title(assignment.title, `Формат сдачи: ${assignment.format_label} · время московское`),
+    title(first.group.name, "Слоты защиты группы · время московское"),
     flash,
+    h("p", { class: "hint" }, "В слот записывается любая допущенная работа группы, каждая — на своё место."),
     section(
       "Слоты защиты",
       pagedList(
-        firstPageThen(first, (offset) => api(`/assignments/${assignmentId}/slots?offset=${offset}`)),
+        firstPageThen(first, (offset) => api(`/groups/${groupId}/slots?offset=${offset}`)),
         (slot) =>
           item({
             text: slotLabel(slot),
@@ -72,11 +72,17 @@ async function assignmentView(ctx, view, assignmentId) {
       ),
     ),
     section(
-      "Допущены, но не записаны",
+      "Допущенные работы без записи",
       pagedList(
-        (offset) => api(`/assignments/${assignmentId}/unassigned?offset=${offset}`),
-        (student) => h("p", { class: "row" }, student.name),
-        { empty: "Все допущенные студенты записаны." },
+        (offset) => api(`/groups/${groupId}/unassigned?offset=${offset}`),
+        (work) =>
+          h(
+            "div",
+            { class: "row" },
+            h("div", { class: "item-title" }, work.name),
+            h("div", { class: "item-subtitle" }, workLabel(work)),
+          ),
+        { empty: "Все допущенные работы записаны." },
       ),
     ),
   );
@@ -94,8 +100,8 @@ async function queueView(ctx, view, slotId) {
     return;
   }
   if (!view.alive()) return;
-  const { slot, assignment } = first;
-  view.back(() => go(`/slots/a/${assignment.id}`));
+  const { slot, group } = first;
+  view.back(() => go(`/slots/g/${group.id}`));
   const errors = h("div", {});
 
   async function change(action) {
@@ -106,7 +112,7 @@ async function queueView(ctx, view, slotId) {
         action === "close"
           ? "Слот закрыт для новых записей."
           : result.reopened
-            ? "Слот снова открыт. Допущенные студенты без записи получат уведомление."
+            ? "Слот снова открыт. Студенты с допущенными работами без записи получат уведомление."
             : "Слот уже открыт.";
       haptic("success");
       queueView(ctx, view, slotId);
@@ -123,7 +129,7 @@ async function queueView(ctx, view, slotId) {
       await api(`/slots/${slotId}`, { method: "DELETE" });
       ctx.flash = "Пустой слот отменён.";
       haptic("success");
-      go(`/slots/a/${assignment.id}`, { replace: true });
+      go(`/slots/g/${group.id}`, { replace: true });
     } catch (error) {
       haptic("error");
       errors.replaceChildren(failure(error));
@@ -148,7 +154,7 @@ async function queueView(ctx, view, slotId) {
 
   mount(
     ctx.root,
-    title(slotLabel(slot), assignment.title),
+    title(slotLabel(slot), group.name),
     flash,
     h("p", {}, `Записано: ${slot.occupied} из ${slot.capacity}. ${status}`),
     errors,
@@ -157,7 +163,17 @@ async function queueView(ctx, view, slotId) {
       "Очередь",
       pagedList(
         firstPageThen(first, (offset) => api(`/slots/${slotId}/queue?offset=${offset}`)),
-        (member) => h("p", { class: "row" }, `${member.position}. ${member.name}`),
+        (member) =>
+          h(
+            "div",
+            { class: "row" },
+            h("div", { class: "item-title" }, `${member.position}. ${member.name}`),
+            h(
+              "div",
+              { class: "item-subtitle" },
+              [workLabel(member), member.username && "@" + member.username].filter(Boolean).join(" · "),
+            ),
+          ),
         { empty: "Пока никто не записался." },
       ),
     ),

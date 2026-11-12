@@ -123,12 +123,12 @@ async def group_students(session: AsyncSession, *, group_id: int) -> tuple[User,
     return tuple(users)
 
 
-async def approved_unbooked_students(
-    session: AsyncSession, *, assignment_id: int
-) -> tuple[User, ...]:
+async def approved_unbooked_students(session: AsyncSession, *, group_id: int) -> tuple[User, ...]:
+    """Students of the group with at least one approved work not booked into a slot."""
     users = await session.scalars(
-        approved_unassigned_query(assignment_id, User)
+        approved_unassigned_query(group_id, User)
         .where(User.role == Role.STUDENT)
+        .group_by(User.id)
         .order_by(User.id)
     )
     return tuple(users)
@@ -137,7 +137,6 @@ async def approved_unbooked_students(
 @dataclass(frozen=True)
 class SlotContext:
     slot: DefenseSlot
-    assignment: Assignment
     group: StudyGroup
     occupied: int
 
@@ -145,9 +144,8 @@ class SlotContext:
 async def slot_context(session: AsyncSession, *, slot_id: int) -> SlotContext | None:
     row = (
         await session.execute(
-            select(DefenseSlot, Assignment, StudyGroup)
-            .join(Assignment, Assignment.id == DefenseSlot.assignment_id)
-            .join(StudyGroup, StudyGroup.id == Assignment.group_id)
+            select(DefenseSlot, StudyGroup)
+            .join(StudyGroup, StudyGroup.id == DefenseSlot.group_id)
             .where(DefenseSlot.id == slot_id)
         )
     ).one_or_none()

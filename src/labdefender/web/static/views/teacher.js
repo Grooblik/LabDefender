@@ -139,6 +139,7 @@ async function groupView(ctx, view, groupId) {
         "div",
         { class: "list" },
         item({ text: "👥 Посмотреть студентов", onClick: () => go(`/groups/${groupId}/students`) }),
+        item({ text: "📊 Отчёт по дисциплине", onClick: () => go(`/groups/${groupId}/report`) }),
         item({ text: "📝 Задания группы", onClick: () => go(`/work/g/${groupId}`) }),
         item({ text: "➕ Новое задание", onClick: () => go(`/work/g/${groupId}/new`) }),
         item({ text: "🗓 Слоты и очередь", onClick: () => go(`/slots/g/${groupId}`) }),
@@ -161,12 +162,12 @@ function studentsView(ctx, view, groupId) {
         return page;
       },
       (student) =>
-        h(
-          "div",
-          { class: "row" },
-          h("div", { class: "item-title" }, student.name),
-          h("div", { class: "item-subtitle" }, student.username ? "@" + student.username : "нет username"),
-        ),
+        item({
+          text: student.name,
+          subtitle: student.username ? "@" + student.username : "нет username",
+          badge: "отчёт",
+          onClick: () => go(`/students/${student.id}/report`),
+        }),
       { empty: "В группе пока нет студентов. Отправьте им ссылку-приглашение." },
     ),
   );
@@ -249,7 +250,7 @@ async function assignmentView(ctx, view, assignmentId) {
     ctx.root,
     title(assignment.title, `${group.name} · формат сдачи: ${assignment.format_label}`),
     flash,
-    h("div", { class: "actions" }, button("🗓 Слоты защиты", () => go(`/slots/a/${assignmentId}`))),
+    h("div", { class: "actions" }, button("🗓 Слоты защиты группы", () => go(`/slots/g/${group.id}`))),
     section(
       "Попытки студентов",
       pagedList(

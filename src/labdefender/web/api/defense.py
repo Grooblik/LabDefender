@@ -1,8 +1,9 @@
-"""Defense slots in the Mini App.
+"""Defense queue in the Mini App: slots of a group (discipline), one place per approved work.
 
-Teacher: calendar, day grid, creation and the slot queue. Student: own booking, choosing or
-switching a slot and moving to the end. The same services as the chat check rights and
-validate; the grid rules come from `services.slot_grid`, so the page computes no time itself.
+Teacher: calendar, day grid, creation and the slot queue. Student: approved works of a group,
+booking a work into a slot or switching it, moving to the end. The same services as the chat
+check rights and validate; the grid rules come from `services.slot_grid`, so the page computes
+no time itself.
 """
 
 from datetime import date, datetime, time, timedelta
@@ -15,6 +16,7 @@ from labdefender.handlers.notifications import notify_queue_booking, notify_slot
 from labdefender.services import queue as queue_service
 from labdefender.services.assignments import get_assignment
 from labdefender.services.errors import InvalidDefenseSlot
+from labdefender.services.groups import get_group
 from labdefender.services.queue import (
     cancel_defense_slot,
     close_defense_slot,
@@ -26,6 +28,7 @@ from labdefender.services.queue import (
     latest_slot_template,
     list_approved_unassigned,
     list_defense_slots,
+    list_defense_works,
     list_slots_between,
     move_to_end,
     reopen_defense_slot,
@@ -69,7 +72,7 @@ class BookingVersion(BaseModel):
 
     expected_entry_id: int | None = Field(strict=True)
     expected_order_at: str | None = Field(strict=True)
-    # Only for enrollment: the chosen slot of this assignment.
+    # Only for enrollment: the chosen slot of the assignment's group.
     slot_id: int | None = Field(default=None, strict=True)
 
     def order_at(self) -> datetime | None:
@@ -97,7 +100,7 @@ def hhmm(value: time) -> str:
 def slot_json(slot: DefenseSlot, occupied: int, now: datetime) -> dict:
     return {
         "id": slot.id,
-        "assignment_id": slot.assignment_id,
+        "group_id": slot.group_id,
         "date": slot.date.isoformat(),
         "date_label": f"{slot.date:%d.%m.%Y}",
         "weekday": weekday_label(slot.date),
@@ -118,47 +121,64 @@ def parse_day(raw: str | None) -> date:
         raise InvalidRequest() from None
 
 
-@routes.get(r"/api/assignments/{id:\d+}/slots")
-async def assignment_slots(request: web.Request) -> web.Response:
-    session, user, assignment_id = db(request), current_user(request), path_id(request)
+def group_json(group) -> dict:
+    return {"id": group.id, "name": group.name}
+
+
+@routes.get(r"/api/groups/{id:\d+}/slots")
+async def group_slots(request: web.Request) -> web.Response:
+    """All slots of the group for its teacher, upcoming ones for its students."""
+    session, user, group_id = db(request), current_user(request), path_id(request)
     page = await list_defense_slots(
-        session, actor_id=user.id, assignment_id=assignment_id, offset=query_offset(request)
+        session, actor_id=user.id, group_id=group_id, offset=query_offset(request)
     )
-    assignment = await get_assignment(session, actor_id=user.id, assignment_id=assignment_id)
+    group = await get_group(session, actor_id=user.id, group_id=group_id)
     now = queue_service.now_moscow()
     return web.json_response(
         {
-            "assignment": assignment_json(assignment),
+            "group": group_json(group),
             **page_json(page, [slot_json(item.slot, item.occupied, now) for item in page.items]),
         }
     )
 
 
-@routes.get(r"/api/assignments/{id:\d+}/unassigned")
+@routes.get(r"/api/groups/{id:\d+}/unassigned")
 async def unassigned(request: web.Request) -> web.Response:
     page = await list_approved_unassigned(
         db(request),
         actor_id=current_user(request).id,
-        assignment_id=path_id(request),
+        group_id=path_id(request),
         offset=query_offset(request),
     )
-    return web.json_response(page_json(page, [{"name": item.student_name} for item in page.items]))
+    return web.json_response(
+        page_json(
+            page,
+            [
+                {
+                    "name": item.student_name,
+                    "assignment_title": item.assignment_title,
+                    "attempt_number": item.submission.attempt_number,
+                }
+                for item in page.items
+            ],
+        )
+    )
 
 
-@routes.get(r"/api/assignments/{id:\d+}/calendar")
+@routes.get(r"/api/groups/{id:\d+}/calendar")
 async def calendar(request: web.Request) -> web.Response:
-    session, user, assignment_id = db(request), current_user(request), path_id(request)
+    session, user, group_id = db(request), current_user(request), path_id(request)
     today = queue_service.today_moscow()
     pages = calendar_pages(today)
     page = query_int(request, "page")
     if page >= len(pages):
         raise InvalidRequest()
     first, last = pages[page]
-    # Teacher-only read: it also checks access to the assignment.
+    # Teacher-only read: it also checks that the group is the teacher's own.
     slots = await list_slots_between(
-        session, actor_id=user.id, assignment_id=assignment_id, first_day=first, last_day=last
+        session, actor_id=user.id, group_id=group_id, first_day=first, last_day=last
     )
-    assignment = await get_assignment(session, actor_id=user.id, assignment_id=assignment_id)
+    group = await get_group(session, actor_id=user.id, group_id=group_id)
     marked = {slot.date for slot in slots}
     days = []
     cursor = first
@@ -175,7 +195,7 @@ async def calendar(request: web.Request) -> web.Response:
         cursor += timedelta(days=1)
     return web.json_response(
         {
-            "assignment": assignment_json(assignment),
+            "group": group_json(group),
             "page": page,
             "pages": len(pages),
             "range_label": range_label(first, last),
@@ -186,18 +206,18 @@ async def calendar(request: web.Request) -> web.Response:
     )
 
 
-@routes.get(r"/api/assignments/{id:\d+}/day")
+@routes.get(r"/api/groups/{id:\d+}/day")
 async def day_options(request: web.Request) -> web.Response:
-    session, user, assignment_id = db(request), current_user(request), path_id(request)
+    session, user, group_id = db(request), current_user(request), path_id(request)
     day = parse_day(request.query.get("date"))
     if day < queue_service.today_moscow():
         raise InvalidRequest("Эта дата уже прошла. Выберите другую.")
     slots = await list_slots_between(
-        session, actor_id=user.id, assignment_id=assignment_id, first_day=day, last_day=day
+        session, actor_id=user.id, group_id=group_id, first_day=day, last_day=day
     )
     now = queue_service.now_moscow()
     busy = [(slot.start_time, slot.end_time) for slot in slots]
-    template = await latest_slot_template(session, actor_id=user.id, assignment_id=assignment_id)
+    template = await latest_slot_template(session, actor_id=user.id, group_id=group_id)
     repeat = None
     if template is not None and template_fits(
         day, template.start_time, template.end_time, busy, now
@@ -241,9 +261,9 @@ async def day_options(request: web.Request) -> web.Response:
     )
 
 
-@routes.post(r"/api/assignments/{id:\d+}/slots")
+@routes.post(r"/api/groups/{id:\d+}/slots")
 async def create_slot(request: web.Request) -> web.Response:
-    session, user, assignment_id = db(request), current_user(request), path_id(request)
+    session, user, group_id = db(request), current_user(request), path_id(request)
     draft = await read_body(request, SlotDraft, error=InvalidDefenseSlot())
     try:
         day = date.fromisoformat(draft.date)
@@ -255,7 +275,7 @@ async def create_slot(request: web.Request) -> web.Response:
         slot = await create_defense_slot(
             session,
             actor_id=user.id,
-            assignment_id=assignment_id,
+            group_id=group_id,
             day_date=day,
             start_time=start,
             end_time=end,
@@ -278,17 +298,22 @@ async def slot_queue(request: web.Request) -> web.Response:
     queue = await get_slot_queue(
         session, actor_id=user.id, slot_id=path_id(request), offset=query_offset(request)
     )
-    assignment = await get_assignment(
-        session, actor_id=user.id, assignment_id=queue.slot.assignment_id
-    )
+    group = await get_group(session, actor_id=user.id, group_id=queue.slot.group_id)
     return web.json_response(
         {
-            "assignment": assignment_json(assignment),
+            "group": group_json(group),
             "slot": slot_json(queue.slot, queue.occupied, queue_service.now_moscow()),
             **page_json(
                 queue.members,
                 [
-                    {"position": member.position, "name": member.student_name}
+                    {
+                        "position": member.position,
+                        "name": member.student_name,
+                        "username": member.student_username,
+                        "assignment_id": member.assignment_id,
+                        "assignment_title": member.assignment_title,
+                        "attempt_number": member.attempt_number,
+                    }
                     for member in queue.members.items
                 ],
             ),
@@ -343,20 +368,44 @@ async def _booking_json(request: web.Request, assignment_id: int) -> dict | None
 @routes.get(r"/api/assignments/{id:\d+}/booking")
 async def booking(request: web.Request) -> web.Response:
     session, user, assignment_id = db(request), current_user(request), path_id(request)
-    await require_approved(session, actor_id=user.id, assignment_id=assignment_id)
+    submission = await require_approved(session, actor_id=user.id, assignment_id=assignment_id)
     assignment = await get_assignment(session, actor_id=user.id, assignment_id=assignment_id)
     return web.json_response(
         {
             "assignment": assignment_json(assignment),
+            "attempt_number": submission.attempt_number,
             "booking": await _booking_json(request, assignment_id),
         }
     )
 
 
+@routes.get(r"/api/groups/{id:\d+}/defense")
+async def defense_works(request: web.Request) -> web.Response:
+    """Student: every approved work of the group and where it is booked."""
+    session, user, group_id = db(request), current_user(request), path_id(request)
+    works = await list_defense_works(session, actor_id=user.id, group_id=group_id)
+    group = await get_group(session, actor_id=user.id, group_id=group_id)
+    now = queue_service.now_moscow()
+    items = []
+    for work in works:
+        booked = work.booking
+        slot = slot_json(booked.slot, booked.occupied, now) if booked else None
+        items.append(
+            {
+                "assignment": assignment_json(work.assignment),
+                "attempt_number": work.submission.attempt_number,
+                "booking": {"slot": slot, "position": booked.position, "occupied": booked.occupied}
+                if booked
+                else None,
+            }
+        )
+    return web.json_response({"group": group_json(group), "works": items})
+
+
 @routes.post(r"/api/assignments/{id:\d+}/enroll")
 async def enroll(request: web.Request) -> web.Response:
     # The service owns the transaction, so nothing is read before it; it also checks that
-    # the slot belongs to this assignment.
+    # the slot belongs to the assignment's group.
     session, user, assignment_id = db(request), current_user(request), path_id(request)
     version = await read_body(request, BookingVersion)
     if version.slot_id is None:
@@ -403,4 +452,4 @@ async def cancel_slot(request: web.Request) -> web.Response:
     slot = await cancel_defense_slot(
         db(request), actor_id=current_user(request).id, slot_id=path_id(request)
     )
-    return web.json_response({"deleted": True, "assignment_id": slot.assignment_id})
+    return web.json_response({"deleted": True, "group_id": slot.group_id})

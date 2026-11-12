@@ -121,12 +121,12 @@ async def day(
     start_time=time(14, 0),
     end_time=time(16, 0),
 ):
-    sessions, ids, _, assignment, _ = context
+    sessions, ids, group, _, _ = context
     async with sessions() as session:
         return await create_defense_slot(
             session,
             actor_id=ids[101],
-            assignment_id=assignment.id,
+            group_id=group.id,
             day_date=day_date,
             start_time=start_time,
             end_time=end_time,
@@ -327,7 +327,7 @@ async def test_no_approval_and_wrong_assignment_cannot_book(context):
         target = await create_defense_slot(
             session,
             actor_id=ids[101],
-            assignment_id=unapproved.id,
+            group_id=group.id,
             day_date=TODAY,
             start_time=time(14, 0),
             end_time=time(16, 0),
@@ -343,13 +343,26 @@ async def test_no_approval_and_wrong_assignment_cannot_book(context):
                 expected_entry_id=None,
                 expected_order_at=None,
             )
+    # A slot of another group of the same teacher does not take this group's works.
+    async with sessions() as session:
+        other_group = await create_group(session, actor_id=ids[101], name="ИВТ-102")
+    async with sessions() as session:
+        foreign = await create_defense_slot(
+            session,
+            actor_id=ids[101],
+            group_id=other_group.id,
+            day_date=TODAY,
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+            capacity=1,
+        )
     async with sessions() as session:
         with pytest.raises(ObjectUnavailable):
             await enroll_slot(
                 session,
                 actor_id=ids[202],
                 assignment_id=assignment.id,
-                slot_id=target.id,
+                slot_id=foreign.id,
                 expected_entry_id=None,
                 expected_order_at=None,
             )
@@ -381,7 +394,7 @@ async def test_roles_and_foreign_groups_cannot_read_or_mutate_queue(context):
             await create_defense_slot(
                 session,
                 actor_id=ids[303],
-                assignment_id=assignment.id,
+                group_id=context[2].id,
                 day_date=TODAY,
                 start_time=time(14, 0),
                 end_time=time(16, 0),
@@ -398,11 +411,11 @@ async def test_past_days_are_hidden_from_students_and_closed_for_writes(context,
     sessions, ids, _, assignment, _ = context
     async with sessions() as session:
         assert not (
-            await list_defense_slots(session, actor_id=ids[202], assignment_id=assignment.id)
+            await list_defense_slots(session, actor_id=ids[202], group_id=context[2].id)
         ).items
-        assert (
-            await list_defense_slots(session, actor_id=ids[101], assignment_id=assignment.id)
-        ).items[0].slot.id == slot.id
+        assert (await list_defense_slots(session, actor_id=ids[101], group_id=context[2].id)).items[
+            0
+        ].slot.id == slot.id
     with pytest.raises(DefenseSlotClosed):
         await book(context, slot, student=203)
     with pytest.raises(DefenseSlotClosed):
@@ -508,22 +521,18 @@ async def test_close_reopen_and_cancel_empty_slot(context):
 async def test_teacher_sees_approved_students_without_slot(context):
     sessions, ids, _, assignment, _ = context
     async with sessions() as session:
-        page = await list_approved_unassigned(
-            session, actor_id=ids[101], assignment_id=assignment.id
-        )
+        page = await list_approved_unassigned(session, actor_id=ids[101], group_id=context[2].id)
         assert {item.student_name for item in page.items} == {"User202", "User203", "User204"}
     slot = await day(context, capacity=2)
     await book(context, slot, student=202)
     async with sessions() as session:
-        page = await list_approved_unassigned(
-            session, actor_id=ids[101], assignment_id=assignment.id
-        )
+        page = await list_approved_unassigned(session, actor_id=ids[101], group_id=context[2].id)
         names = {item.student_name for item in page.items}
         assert "User202" not in names
         assert {"User203", "User204"} <= names
     async with sessions() as session:
         with pytest.raises(DomainError):
-            await list_approved_unassigned(session, actor_id=ids[202], assignment_id=assignment.id)
+            await list_approved_unassigned(session, actor_id=ids[202], group_id=context[2].id)
 
 
 def message_update(text, *, user_id=101):

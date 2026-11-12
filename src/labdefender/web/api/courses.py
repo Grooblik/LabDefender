@@ -134,7 +134,11 @@ async def group_members(request: web.Request) -> web.Response:
     )
     group = await get_group(session, actor_id=user.id, group_id=group_id)
     body = page_json(
-        page, [{"name": member.full_name, "username": member.username} for member in page.items]
+        page,
+        [
+            {"id": member.id, "name": member.full_name, "username": member.username}
+            for member in page.items
+        ],
     )
     body["group"] = {"id": group.id, "name": group.name}
     return web.json_response(body)

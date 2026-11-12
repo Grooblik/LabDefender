@@ -7,10 +7,11 @@ import { haptic, setMainBusy } from "../lib/telegram.js";
 
 const MAX_CAPACITY = 2147483647;
 
-export function newSlotView(ctx, view, assignmentId) {
+// A slot belongs to a group: students book any approved work of the group into it.
+export function newSlotView(ctx, view, groupId) {
   const draft = { day: null, start: null, end: null, capacity: null };
   const steps = []; // Step history for the Back button inside the wizard.
-  let assignmentTitle = "";
+  let groupName = "";
 
   function enter(step) {
     steps.push(step);
@@ -26,14 +27,14 @@ export function newSlotView(ctx, view, assignmentId) {
     steps.pop();
     const previous = steps.pop();
     if (previous) enter(previous);
-    else go(`/slots/a/${assignmentId}`);
+    else go(`/slots/g/${groupId}`);
   }
 
   function screen(step, ...children) {
     view.main(null);
     mount(
       ctx.root,
-      title("Новый слот", [assignmentTitle, step].filter(Boolean).join(" · ")),
+      title("Новый слот", [groupName, step].filter(Boolean).join(" · ")),
       ...children,
     );
   }
@@ -49,11 +50,11 @@ export function newSlotView(ctx, view, assignmentId) {
   }
 
   async function dateStep(page) {
-    const calendar = await load(`/assignments/${assignmentId}/calendar?page=${page}`, () =>
+    const calendar = await load(`/groups/${groupId}/calendar?page=${page}`, () =>
       dateStep(page),
     );
     if (!calendar || !view.alive()) return;
-    assignmentTitle = calendar.assignment.title;
+    groupName = calendar.group.name;
     const cells = calendar.weekdays.map((name) => h("span", { class: "weekday" }, name));
     for (let index = 0; index < calendar.leading; index += 1) {
       cells.push(h("span", { class: "cell empty" }));
@@ -86,12 +87,12 @@ export function newSlotView(ctx, view, assignmentId) {
   }
 
   async function startStep(date) {
-    const day = await load(`/assignments/${assignmentId}/day?date=${date}`, () => startStep(date));
+    const day = await load(`/groups/${groupId}/day?date=${date}`, () => startStep(date));
     if (!day || !view.alive()) return;
     draft.day = day;
     const busy = day.busy.length
       ? "Уже есть: " + day.busy.map((slot) => slot.time_label).join(", ") + "."
-      : "Других слотов задания на этот день нет.";
+      : "Других слотов группы на этот день нет.";
     const children = [h("p", {}, `${day.date_label}, ${day.weekday}`), h("p", { class: "hint" }, busy)];
     if (day.template) {
       const template = day.template;
@@ -223,7 +224,7 @@ export function newSlotView(ctx, view, assignmentId) {
         ),
       ),
       errors,
-      h("p", { class: "hint" }, "Допущенные студенты без записи получат уведомление о новом слоте."),
+      h("p", { class: "hint" }, "Студенты группы с допущенными работами без записи получат уведомление о новом слоте."),
     );
     view.main("Создать слот", async () => {
       if (busy) return;
@@ -231,13 +232,13 @@ export function newSlotView(ctx, view, assignmentId) {
       setMainBusy(true);
       errors.replaceChildren();
       try {
-        const result = await api(`/assignments/${assignmentId}/slots`, {
+        const result = await api(`/groups/${groupId}/slots`, {
           method: "POST",
           key,
           body: { date: draft.day.date, start: draft.start, end: draft.end, capacity: draft.capacity },
         });
         haptic("success");
-        ctx.flash = "Слот создан. Допущенные студенты без записи получат уведомление.";
+        ctx.flash = "Слот создан. Студенты с допущенными работами без записи получат уведомление.";
         go(`/slots/s/${result.slot.id}`, { replace: true });
       } catch (error) {
         haptic("error");

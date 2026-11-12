@@ -76,8 +76,13 @@ async def require_submission_access(
 async def require_defense_slot_access(
     session: AsyncSession, *, actor_id: int, slot_id: int
 ) -> DefenseSlot:
+    """The group's teacher or a student of the group; anyone else gets "not found"."""
     slot = await session.get(DefenseSlot, slot_id)
     if slot is None:
         raise ObjectUnavailable()
-    await require_assignment_access(session, actor_id=actor_id, assignment_id=slot.assignment_id)
+    user = await require_user(session, actor_id=actor_id)
+    if user.role == Role.TEACHER:
+        await require_group_owner(session, actor_id=actor_id, group_id=slot.group_id)
+    else:
+        await require_group_member(session, actor_id=actor_id, group_id=slot.group_id)
     return slot

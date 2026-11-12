@@ -8,11 +8,13 @@ const SECTIONS = {
     { text: "📝 Задания", subtitle: "Публикация, попытки студентов", path: "/work" },
     { text: "🗓 Слоты и очередь", subtitle: "Календарь, новые слоты, очереди", path: "/slots" },
     { text: "👥 Группы", subtitle: "Новая группа, ссылка-приглашение", path: "/groups" },
+    { text: "📊 Отчёты", subtitle: "Кто что сделал: таблица по дисциплине", path: "/reports" },
     { text: "🔔 Уведомления", subtitle: "Какие уведомления присылать", path: "/notifications" },
   ],
   student: [
     { text: "📚 Задания", subtitle: "Условия, статусы, сдача решений", path: "/tasks" },
-    { text: "🗓 Защита и очередь", subtitle: "Запись на слот, позиция в очереди", path: "/defense" },
+    { text: "🗓 Защита и очередь", subtitle: "Запись работ на слот, позиция в очереди", path: "/defense" },
+    { text: "📊 Мой отчёт", subtitle: "Что сделано по всем дисциплинам", path: "/report" },
   ],
 };
 

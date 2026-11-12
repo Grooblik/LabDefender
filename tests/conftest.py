@@ -13,7 +13,7 @@ from aiogram.methods import (
     SendMessage,
     SetChatMenuButton,
 )
-from aiogram.types import Chat, Document, Message, User
+from aiogram.types import BufferedInputFile, Chat, Document, Message, User
 
 from labdefender.db.session import create_database, initialize_database
 
@@ -47,14 +47,17 @@ class RecordingSession(BaseSession):
                 text=method.text,
             )
         if isinstance(method, SendDocument):
-            assert isinstance(method.document, str), (
-                "Only existing Telegram file_id values are sent"
-            )
+            # Solutions are resent by file_id; only generated reports are uploaded as files.
+            assert isinstance(method.document, str) or (
+                isinstance(method.document, BufferedInputFile)
+                and method.document.filename.endswith(".csv")
+            ), "Only existing Telegram file_id values or CSV reports are sent"
+            file_id = method.document if isinstance(method.document, str) else "uploaded-report"
             return Message(
                 message_id=len(self.calls),
                 date=datetime.now(UTC),
                 chat=Chat(id=int(method.chat_id), type="private"),
-                document=Document(file_id=method.document, file_unique_id="unique-document"),
+                document=Document(file_id=file_id, file_unique_id="unique-document"),
             )
         if isinstance(method, (AnswerCallbackQuery, DeleteMessage, SetChatMenuButton)):
             return True

@@ -55,6 +55,7 @@ def help_text(user: User, *, admin: bool, app: bool = False) -> str:
             "/cancel — отменить текущий ввод",
             "/id — мой Telegram ID",
             "/name — изменить своё имя",
+            "/report — отчёт файлом CSV (Excel)",
             *extra,
         ]
     )
