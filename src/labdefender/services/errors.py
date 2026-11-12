@@ -15,7 +15,8 @@ class InvalidDefenseSlot(DomainError):
 class DefenseSlotExists(DomainError):
     def __init__(self) -> None:
         super().__init__(
-            "На это время у задания уже есть слот защиты. Откройте /queue и проверьте расписание."
+            "На это время у задания уже есть слот защиты. "
+            "Проверьте расписание в разделе «🗓 Защита и очередь»."
         )
 
 
@@ -27,7 +28,8 @@ class DefenseSlotOverlap(DomainError):
 class ApprovalRequired(DomainError):
     def __init__(self) -> None:
         super().__init__(
-            "Для записи на защиту нужен допуск последней попытки. Проверьте /assignments."
+            "Для записи на защиту нужен допуск последней попытки. "
+            "Проверьте статус в разделе «📚 Задания»."
         )
 
 
@@ -57,7 +59,7 @@ class InvalidAssignmentFormat(DomainError):
 class QueueChanged(DomainError):
     def __init__(self) -> None:
         super().__init__(
-            "Ваша запись изменилась или недоступна. Откройте очередь заново через /queue."
+            "Ваша запись изменилась или недоступна. Откройте раздел «🗓 Защита и очередь» заново."
         )
 
 
@@ -88,7 +90,7 @@ class InvalidReviewComment(DomainError):
 
 class StaleCourseAction(DomainError):
     def __init__(self) -> None:
-        super().__init__("Кнопка устарела. Откройте раздел заново через /help.")
+        super().__init__("Кнопка устарела. Откройте раздел заново кнопкой меню.")
 
 
 class SolutionDeliveryUnavailable(DomainError):
@@ -104,6 +106,11 @@ class AccessDenied(DomainError):
 class ObjectUnavailable(DomainError):
     def __init__(self) -> None:
         super().__init__("Объект не найден или недоступен.")
+
+
+class InvalidDisplayName(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Имя должно содержать от 1 до 128 символов. Введите его заново.")
 
 
 class InvalidGroupName(DomainError):
@@ -122,22 +129,28 @@ class InvalidInvitation(DomainError):
 
 class GroupCreationUnavailable(DomainError):
     def __init__(self) -> None:
-        super().__init__("Не удалось создать группу. Попробуйте ещё раз через /create_group.")
+        super().__init__(
+            "Не удалось создать группу. Попробуйте ещё раз: «👥 Мои группы» → «➕ Создать группу»."
+        )
 
 
 class StaleGroupAction(DomainError):
     def __init__(self) -> None:
-        super().__init__("Кнопка устарела. Начните создание заново через /create_group.")
+        super().__init__(
+            "Кнопка устарела. Начните создание заново: «👥 Мои группы» → «➕ Создать группу»."
+        )
 
 
 class InvitationUnavailable(DomainError):
     def __init__(self) -> None:
-        super().__init__("Не удалось получить ссылку. Попробуйте ещё раз через /invite.")
+        super().__init__("Не удалось получить ссылку. Попробуйте ещё раз: «🔗 Пригласить».")
 
 
 class UserNotRegistered(DomainError):
     def __init__(self) -> None:
-        super().__init__("Пользователь не зарегистрирован. Попросите его сначала выполнить /start.")
+        super().__init__(
+            "Пользователь не зарегистрирован. Попросите его сначала открыть бота (/start)."
+        )
 
 
 class RegistrationDisabled(DomainError):
@@ -150,7 +163,7 @@ class InvalidRegistrationCode(DomainError):
         self.remaining_attempts = remaining_attempts
         super().__init__(
             f"Неверный код. Осталось попыток: {remaining_attempts}. "
-            "Введите код ещё раз или отправьте /cancel."
+            "Введите код ещё раз или нажмите «Отмена»."
         )
 
 
@@ -158,6 +171,4 @@ class RegistrationBlocked(DomainError):
     def __init__(self, retry_after_seconds: int) -> None:
         self.retry_after_seconds = retry_after_seconds
         minutes = max(1, math.ceil(retry_after_seconds / 60))
-        super().__init__(
-            f"Слишком много неверных попыток. Повторите через {minutes} мин. с помощью /teacher."
-        )
+        super().__init__(f"Слишком много неверных попыток. Повторите через {minutes} мин.")

@@ -11,6 +11,7 @@ from aiogram.methods import (
     GetMe,
     SendDocument,
     SendMessage,
+    SetChatMenuButton,
 )
 from aiogram.types import Chat, Document, Message, User
 
@@ -55,7 +56,7 @@ class RecordingSession(BaseSession):
                 chat=Chat(id=int(method.chat_id), type="private"),
                 document=Document(file_id=method.document, file_unique_id="unique-document"),
             )
-        if isinstance(method, (AnswerCallbackQuery, DeleteMessage)):
+        if isinstance(method, (AnswerCallbackQuery, DeleteMessage, SetChatMenuButton)):
             return True
         if isinstance(method, GetMe):
             return User(

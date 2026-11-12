@@ -259,3 +259,42 @@ async def get_submission(
         assignment=assignment,
         group=await session.get(StudyGroup, assignment.group_id),
     )
+
+
+@dataclass(frozen=True)
+class PendingReview:
+    submission: Submission
+    student_name: str
+    assignment: Assignment
+    group_name: str
+
+
+async def list_pending_reviews(
+    session: AsyncSession, *, actor_id: int, offset: int = 0
+) -> Page[PendingReview]:
+    """Attempts awaiting review in all of the teacher's groups, oldest first.
+
+    A pending attempt is always the student's latest one: a new attempt needs a returned one.
+    """
+    validate_offset(offset)
+    await require_user(session, actor_id=actor_id, role=Role.TEACHER)
+    rows = (
+        await session.execute(
+            select(Submission, User.full_name, Assignment, StudyGroup.name)
+            .join(User, User.id == Submission.student_id)
+            .join(Assignment, Assignment.id == Submission.assignment_id)
+            .join(StudyGroup, StudyGroup.id == Assignment.group_id)
+            .where(
+                StudyGroup.teacher_id == actor_id,
+                Submission.status == SubmissionStatus.PENDING,
+            )
+            .order_by(Submission.submitted_at, Submission.id)
+            .offset(offset)
+            .limit(PAGE_SIZE + 1)
+        )
+    ).all()
+    return Page(
+        items=tuple(PendingReview(*row) for row in rows[:PAGE_SIZE]),
+        offset=offset,
+        has_next=len(rows) > PAGE_SIZE,
+    )

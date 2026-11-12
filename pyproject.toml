@@ -14,6 +14,8 @@ dependencies = [
     "pydantic-settings>=2.9,<3",
     "tzdata>=2025.2",
     "filelock>=3.18,<4",
+    # Certificates for the Mini App address check; aiogram depends on it as well.
+    "certifi>=2023.7.22",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +26,9 @@ labdefender = "labdefender.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+labdefender = ["web/static/**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

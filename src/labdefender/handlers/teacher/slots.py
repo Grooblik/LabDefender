@@ -23,24 +23,15 @@ from labdefender.handlers.coursework import require_draft
 from labdefender.handlers.defense import show_slot_queue
 from labdefender.handlers.notifications import Notifier, notify_slot_opened
 from labdefender.keyboards.defense import TeacherDayDraftCallback
+from labdefender.keyboards.menu import cancel_keyboard
 from labdefender.keyboards.slots import (
-    MINUTES_PER_DAY,
     TeacherSlotCallback,
     calendar_keyboard,
-    calendar_window,
     capacity_keyboard,
     duration_keyboard,
-    duration_options,
-    from_minutes,
-    interval_label,
     parse_date_value,
-    range_label,
     slot_confirmation_keyboard,
     start_keyboard,
-    start_options,
-    template_fits,
-    to_minutes,
-    weekday_label,
 )
 from labdefender.services import queue as queue_service
 from labdefender.services.access import (
@@ -54,6 +45,18 @@ from labdefender.services.queue import (
     latest_slot_template,
     list_slots_between,
     validate_defense_slot,
+)
+from labdefender.services.slot_grid import (
+    MINUTES_PER_DAY,
+    calendar_window,
+    duration_options,
+    from_minutes,
+    interval_label,
+    range_label,
+    start_options,
+    template_fits,
+    to_minutes,
+    weekday_label,
 )
 from labdefender.states.defense import DefenseSlotCreation
 
@@ -155,7 +158,7 @@ async def _show_calendar(
         f"Задание: {data['title']}\n"
         f"Выберите дату слота (Москва), {range_label(first, last)}.\n"
         "• — на дату уже есть слоты задания.\n"
-        "Или отправьте дату текстом YYYY-MM-DD. Отмена: /cancel.",
+        "Или отправьте дату текстом YYYY-MM-DD.",
         calendar_keyboard(
             today=today,
             page=page,
@@ -205,7 +208,7 @@ async def _show_start(
         f"Задание: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} ({weekday_label(day)})\n"
         f"{_busy_line(slots)}\n"
-        f"Выберите время начала (Москва) или отправьте HH:MM. Отмена: /cancel.{hint}",
+        f"Выберите время начала (Москва) или отправьте HH:MM.{hint}",
         start_keyboard(options, template=repeat, nonce=nonce),
         edit=edit,
     )
@@ -224,7 +227,7 @@ async def _show_end(
         f"Задание: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} ({weekday_label(day)}), начало {start:%H:%M}.\n"
         f"{_busy_line(slots)}\n"
-        "Выберите длительность или отправьте время окончания HH:MM. Отмена: /cancel.",
+        "Выберите длительность или отправьте время окончания HH:MM.",
         duration_keyboard(options, nonce=nonce),
         edit=edit,
     )
@@ -239,7 +242,7 @@ async def _show_capacity(message: Message, state: FSMContext, *, edit: bool) -> 
         message,
         f"Задание: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} ({weekday_label(day)}), {interval_label(start, end)}.\n"
-        "Выберите число мест или отправьте положительное число. Отмена: /cancel.",
+        "Выберите число мест или отправьте положительное число.",
         capacity_keyboard(nonce=nonce),
         edit=edit,
     )
@@ -480,8 +483,8 @@ def create_router() -> Router:
     )
     async def text_required(message: Message) -> None:
         await message.answer(
-            "Выберите вариант кнопкой или отправьте дату, время или число мест текстом. "
-            "Отмена: /cancel."
+            "Выберите вариант кнопкой или отправьте дату, время или число мест текстом.",
+            reply_markup=cancel_keyboard(),
         )
 
     return router

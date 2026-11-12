@@ -1,7 +1,7 @@
 import secrets
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ from labdefender.keyboards.coursework import (
     draft_keyboard,
     selection_keyboard,
 )
+from labdefender.keyboards.menu import cancel_keyboard
 from labdefender.services.access import require_group_owner
 from labdefender.services.assignments import create_assignment, validate_assignment
 from labdefender.services.errors import InvalidAssignment, StaleCourseAction
@@ -40,20 +41,6 @@ from labdefender.states.coursework import AssignmentCreation, SubmissionReview
 
 def create_router() -> Router:
     router = Router(name="teacher_coursework")
-
-    @router.message(Command("new_assignment"))
-    async def new_assignment(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_course_groups(message, session, current_user, mode="publish")
-
-    @router.message(Command("submissions"))
-    async def submissions(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_course_groups(message, session, current_user, mode="review")
 
     @router.callback_query(TeacherCourseCallback.filter())
     async def course_action(
@@ -119,7 +106,8 @@ def create_router() -> Router:
             await state.set_data({"submission_id": object_id})
             await state.set_state(SubmissionReview.comment)
             await callback.message.answer(
-                "Введите комментарий для возврата (до 4000 символов). Отмена: /cancel."
+                "Введите комментарий для возврата (до 4000 символов).",
+                reply_markup=cancel_keyboard(),
             )
         await callback.answer()
 
@@ -145,7 +133,7 @@ def create_router() -> Router:
             await state.update_data(format=assignment_format.value)
             await state.set_state(AssignmentCreation.title)
             await callback.message.answer(
-                "Введите название задания (до 256 символов). Отмена: /cancel."
+                "Введите название задания (до 256 символов).", reply_markup=cancel_keyboard()
             )
         await callback.answer()
 
@@ -156,7 +144,9 @@ def create_router() -> Router:
             raise InvalidAssignment()
         await state.update_data(title=title)
         await state.set_state(AssignmentCreation.description)
-        await message.answer("Введите условие задания (до 4000 символов). Отмена: /cancel.")
+        await message.answer(
+            "Введите условие задания (до 4000 символов).", reply_markup=cancel_keyboard()
+        )
 
     @router.message(AssignmentCreation.description, PlainTextInput())
     async def assignment_description(
@@ -251,7 +241,7 @@ def create_router() -> Router:
     @router.message(AssignmentCreation.format)
     async def format_requires_button(message: Message) -> None:
         await message.answer(
-            "Выберите формат сдачи кнопкой выше или отмените ввод: /cancel.",
+            "Выберите формат сдачи кнопкой или нажмите «Отмена».",
             reply_markup=assignment_format_keyboard(),
         )
 
@@ -264,6 +254,8 @@ def create_router() -> Router:
         ~F.text,
     )
     async def text_required(message: Message) -> None:
-        await message.answer("Отправьте текстовое сообщение или отмените ввод: /cancel.")
+        await message.answer(
+            "Отправьте текстовое сообщение или нажмите «Отмена».", reply_markup=cancel_keyboard()
+        )
 
     return router

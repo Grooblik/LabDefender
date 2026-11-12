@@ -1,5 +1,4 @@
 from aiogram import Bot, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,20 +23,6 @@ from labdefender.services.queue import (
 
 def create_router() -> Router:
     router = Router(name="teacher_defense")
-
-    @router.message(Command("new_defense_day", "new_slot"))
-    async def new_day(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_queue_groups(message, session, current_user, new=True)
-
-    @router.message(Command("queue"))
-    async def queue(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        await show_queue_groups(message, session, current_user)
 
     @router.callback_query(TeacherQueueCallback.filter())
     async def queue_action(

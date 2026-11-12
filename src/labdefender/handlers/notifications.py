@@ -3,6 +3,8 @@
 Students always receive notices: new assignment, review result, a new or reopened defense slot.
 Teachers receive new submissions, group joins and slot bookings, each category can be muted.
 
+With the Mini App on, every notice also has a button that opens the same object in the app.
+
 Delivery is best effort. Handlers call `notify_*` only after the service has committed, before
 their own reply, so a failed reply does not lose the notice. Any error while preparing or
 sending a notice is logged and never undoes or hides the action. Notices are not resent after
@@ -17,8 +19,6 @@ from dataclasses import dataclass
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +36,6 @@ from labdefender.keyboards.notifications import (
     settings_keyboard,
     settings_text,
 )
-from labdefender.keyboards.slots import weekday_label
 from labdefender.services import queue as queue_service
 from labdefender.services.notifications import (
     NoticeCategory,
@@ -48,6 +47,8 @@ from labdefender.services.notifications import (
     submission_context,
     teacher_preferences,
 )
+from labdefender.services.slot_grid import weekday_label
+from labdefender.web import mini_app_url
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +75,20 @@ class Notifier:
 
     Inline mode (default; tests and tools) delivers inside the handler. Background mode, used
     by the running bot, schedules delivery so the acting user does not wait for a broadcast;
-    `close()` lets scheduled notices finish at shutdown.
+    `close()` lets scheduled notices finish at shutdown. With `webapp_url`, notices carry
+    a button to the matching screen of the Mini App.
     """
 
-    def __init__(self, *, background: bool = False, delay: float = 0.0) -> None:
+    def __init__(
+        self, *, background: bool = False, delay: float = 0.0, webapp_url: str = ""
+    ) -> None:
         self.background = background
         self.delay = delay
+        self.webapp_url = webapp_url
         self._tasks: set[asyncio.Task] = set()
+
+    def app_url(self, screen: str) -> str | None:
+        return mini_app_url(self.webapp_url, screen) if self.webapp_url else None
 
     async def send(self, bot: Bot, notices: Sequence[Notice]) -> None:
         notices = tuple(notices)
@@ -196,6 +204,7 @@ async def notify_submission_received(
                             TeacherCourseCallback(action="open", object_id=submission.id).pack(),
                         )
                     ],
+                    app=notifier.app_url(f"/review/s/{submission.id}"),
                     mute=NoticeCategory.SUBMISSIONS,
                 ),
             )
@@ -219,6 +228,7 @@ async def notify_submission_reviewed(
             "Выбрать слот защиты",
             StudentQueueCallback(action="days", object_id=assignment.id).pack(),
         )
+        screen = f"/defense/a/{assignment.id}"
     elif submission.status == SubmissionStatus.RETURNED:
         text = (
             f"Работа возвращена на доработку.\n{header}\n"
@@ -228,9 +238,11 @@ async def notify_submission_reviewed(
             "Открыть задание",
             StudentCourseCallback(action="open", object_id=assignment.id).pack(),
         )
+        screen = f"/tasks/a/{assignment.id}"
     else:
         return
-    await notifier.send(bot, [Notice(context.student.telegram_id, text, notice_keyboard([button]))])
+    markup = notice_keyboard([button], app=notifier.app_url(screen))
+    await notifier.send(bot, [Notice(context.student.telegram_id, text, markup)])
 
 
 @_safe
@@ -242,7 +254,8 @@ async def notify_assignment_published(
         return
     group = await session.get(StudyGroup, assignment.group_id)
     markup = notice_keyboard(
-        [("Открыть задание", StudentCourseCallback(action="open", object_id=assignment.id).pack())]
+        [("Открыть задание", StudentCourseCallback(action="open", object_id=assignment.id).pack())],
+        app=notifier.app_url(f"/tasks/a/{assignment.id}"),
     )
     text = (
         f"Новое задание в группе «{group.name}».\n{assignment.title}\n"
@@ -279,7 +292,8 @@ async def notify_slot_opened(
         + f"Свободных мест: {slot.capacity - context.occupied}"
     )
     markup = notice_keyboard(
-        [("Записаться", StudentQueueCallback(action="choose", object_id=slot.id).pack())]
+        [("Записаться", StudentQueueCallback(action="choose", object_id=slot.id).pack())],
+        app=notifier.app_url(f"/defense/a/{context.assignment.id}"),
     )
     students = await approved_unbooked_students(session, assignment_id=context.assignment.id)
     await notifier.send(bot, [Notice(student.telegram_id, text, markup) for student in students])
@@ -313,6 +327,7 @@ async def notify_student_joined(
                             TeacherGroupCallback(action="open", value=group.id).pack(),
                         )
                     ],
+                    app=notifier.app_url(f"/groups/{group.id}"),
                     mute=NoticeCategory.JOINS,
                 ),
             )
@@ -356,6 +371,7 @@ async def notify_queue_booking(
                             TeacherQueueCallback(action="open", object_id=slot.slot.id).pack(),
                         )
                     ],
+                    app=notifier.app_url(f"/slots/s/{slot.slot.id}"),
                     mute=NoticeCategory.QUEUE,
                 ),
             )
@@ -363,24 +379,22 @@ async def notify_queue_booking(
     )
 
 
-def create_router() -> Router:
-    router = Router(name="notifications")
-
-    @router.message(Command("notifications"))
-    async def notifications(
-        message: Message, session: AsyncSession, current_user: User, state: FSMContext
-    ) -> None:
-        await state.clear()
-        if current_user.role != Role.TEACHER:
-            await message.answer(
-                "Студентам уведомления приходят всегда: новые задания, результат проверки "
-                "и новые слоты защиты. Отключить их нельзя."
-            )
-            return
-        preferences = await get_notification_preferences(session, actor_id=current_user.id)
+async def show_notification_settings(
+    message: Message, session: AsyncSession, current_user: User
+) -> None:
+    if current_user.role != Role.TEACHER:
         await message.answer(
-            settings_text(preferences), reply_markup=settings_keyboard(preferences)
+            "Студентам уведомления приходят всегда: новые задания, результат проверки "
+            "и новые слоты защиты. Отключить их нельзя."
         )
+        return
+    preferences = await get_notification_preferences(session, actor_id=current_user.id)
+    await message.answer(settings_text(preferences), reply_markup=settings_keyboard(preferences))
+
+
+def create_router() -> Router:
+    # The /notifications screen itself is opened from handlers.menu.
+    router = Router(name="notifications")
 
     @router.callback_query(TeacherNotifyCallback.filter())
     async def switch(
@@ -403,7 +417,7 @@ def create_router() -> Router:
         if callback_data.source == "notice":
             label = CATEGORY_LABELS[categories[0]]
             await callback.answer(
-                f"Уведомления «{label}» выключены. Включить снова: /notifications",
+                f"Уведомления «{label}» выключены. Включить снова: «🔔 Уведомления».",
                 show_alert=True,
             )
             return

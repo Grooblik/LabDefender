@@ -260,9 +260,12 @@ async def test_full_flow_create_invite_and_join_by_new_student(context, bot):
     assert "https://t.me/LabDefenderTestBot?start=join_" in invite.text
     payload = invite.text.split("?start=")[1]
     await dispatcher.feed_update(bot, message_update(f"/start {payload}", user_id=404))
-    assert "Вы присоединились к группе «ИВТ-101»" in messages(bot)[-1].text
+    joined, card = messages(bot)[-2:]
+    assert joined.text == "Вы присоединились к группе «ИВТ-101»."
+    assert joined.reply_markup.keyboard[0][0].text == "📚 Задания"
+    assert card.text == "Группа «ИВТ-101»\nВы состоите в этой группе."
     await dispatcher.feed_update(bot, message_update(f"/start {payload}", user_id=404))
-    assert "Вы уже в группе" in messages(bot)[-1].text
+    assert "Вы уже в группе" in messages(bot)[-2].text
     await dispatcher.feed_update(bot, message_update("/my_groups", user_id=404))
     open_group = messages(bot)[-1].reply_markup.inline_keyboard[0][0].callback_data
     await dispatcher.feed_update(bot, callback_update(open_group, user_id=404))
@@ -366,7 +369,8 @@ async def test_invite_selection_and_pagination_are_available_to_owner(context, b
     dispatcher = create_dispatcher(sessions)
     await dispatcher.feed_update(bot, message_update("/invite"))
     keyboard = messages(bot)[-1].reply_markup.inline_keyboard
-    next_page = keyboard[-1][0].callback_data
+    assert keyboard[-1][0].text == "➕ Создать группу"
+    next_page = keyboard[-2][0].callback_data
     await dispatcher.feed_update(bot, callback_update(next_page))
     next_keyboard = messages(bot)[-1].reply_markup.inline_keyboard
     assert f"#{groups[-1].id}" in next_keyboard[0][0].text

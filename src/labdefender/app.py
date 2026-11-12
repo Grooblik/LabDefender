@@ -10,12 +10,16 @@ from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from labdefender.config import Settings
+from labdefender.db.models import User
 from labdefender.db.session import create_database, initialize_database
 from labdefender.handlers import common, notifications, student, teacher
 from labdefender.handlers.notifications import Notifier
+from labdefender.keyboards.menu import MenuButton, main_menu
 from labdefender.local import database_path, instance_locks
 from labdefender.middlewares.database import DatabaseMiddleware
 from labdefender.middlewares.domain_errors import DomainErrorMiddleware
+from labdefender.web.app import configure_menu_button, web_server
+from labdefender.web.reachability import address_check
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,8 @@ def create_dispatcher(
         registration_code=settings.teacher_registration_code if settings else SecretStr(""),
         admin_ids=settings.admin_ids if settings else frozenset(),
         notifier=notifier,
+        # Mini App base address for /app and the help button; empty when it is off.
+        webapp_url=settings.webapp_url if settings else "",
     )
 
     async def finish_notifications() -> None:
@@ -52,19 +58,24 @@ def create_dispatcher(
         common.create_router(),
         student.create_router(),
         teacher.create_router(),
-        # Both roles: /notifications and the teacher's notification switches.
+        # The teacher's notification switches; the screen itself opens from handlers.menu.
         notifications.create_router(),
     )
 
     fallback = Router(name="fallback")
 
     @fallback.message()
-    async def unknown_message(message: Message) -> None:
-        await message.answer("Команда не найдена или недоступна для вашей роли. Помощь: /help")
+    async def unknown_message(message: Message, current_user: User | None = None) -> None:
+        # Also restores the main menu for chats that never received it (e.g. after an update).
+        await message.answer(
+            "Команда не найдена или недоступна для вашей роли. "
+            f"Выберите раздел кнопками ниже или откройте «{MenuButton.HELP.value}».",
+            reply_markup=main_menu(current_user.role) if current_user else None,
+        )
 
     @fallback.callback_query()
     async def unknown_callback(callback: CallbackQuery) -> None:
-        await callback.answer("Кнопка недоступна. Откройте меню заново через /start.")
+        await callback.answer("Кнопка недоступна. Откройте раздел заново кнопкой меню.")
 
     private.include_router(fallback)
     dispatcher.include_router(private)
@@ -84,12 +95,10 @@ async def _run(settings: Settings, path: Path) -> None:
     )
     try:
         await initialize_database(engine)
-        dispatcher = create_dispatcher(
-            session_factory,
-            settings=settings,
-            # Background delivery: the acting user does not wait for a broadcast.
-            notifier=Notifier(background=True, delay=0.05),
-        )
+        # Background delivery: the acting user does not wait for a broadcast.
+        # The Mini App API shares this notifier with the chat handlers.
+        notifier = Notifier(background=True, delay=0.05, webapp_url=settings.webapp_url)
+        dispatcher = create_dispatcher(session_factory, settings=settings, notifier=notifier)
         # Never log settings or the bot token. Bot owns and closes its HTTP session.
         async with Bot(token=settings.bot_token.get_secret_value()) as bot:
             await bot.set_my_commands(
@@ -97,6 +106,7 @@ async def _run(settings: Settings, path: Path) -> None:
                     BotCommand(command="start", description="Начать"),
                     BotCommand(command="help", description="Помощь"),
                     BotCommand(command="id", description="Мой Telegram ID"),
+                    BotCommand(command="name", description="Моё имя"),
                     BotCommand(command="cancel", description="Отменить ввод"),
                     BotCommand(command="teacher", description="Доступ преподавателя"),
                     BotCommand(command="my_groups", description="Мои группы"),
@@ -108,13 +118,26 @@ async def _run(settings: Settings, path: Path) -> None:
                     BotCommand(command="new_slot", description="Открыть слот защиты"),
                     BotCommand(command="queue", description="Защита и очередь"),
                     BotCommand(command="notifications", description="Уведомления"),
+                    BotCommand(command="app", description="Открыть приложение"),
                 ]
             )
-            logger.info("Starting polling")
-            await dispatcher.start_polling(
-                bot,
-                allowed_updates=dispatcher.resolve_used_update_types(),
-                close_bot_session=False,
-            )
+            # Also resets the button when WEBAPP_URL is empty: no link to a stopped tunnel.
+            await configure_menu_button(bot, settings.webapp_url)
+            async with (
+                web_server(
+                    session_factory,
+                    settings,
+                    bot=bot,
+                    notifier=notifier,
+                    storage=dispatcher.storage,
+                ) as instance,
+                address_check(settings.webapp_url, instance),
+            ):
+                logger.info("Starting polling")
+                await dispatcher.start_polling(
+                    bot,
+                    allowed_updates=dispatcher.resolve_used_update_types(),
+                    close_bot_session=False,
+                )
     finally:
         await engine.dispose()

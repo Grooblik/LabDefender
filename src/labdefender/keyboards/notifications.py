@@ -1,7 +1,7 @@
 from typing import Literal
 
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from labdefender.services.notifications import NoticeCategory, NotificationPreferences
 
@@ -11,6 +11,7 @@ CATEGORY_LABELS = {
     NoticeCategory.QUEUE: "запись и смена слотов защиты",
 }
 MUTE_LABEL = "🔕 Не присылать такие"
+APP_NOTICE_LABEL = "📱 Открыть в приложении"
 
 
 class TeacherNotifyCallback(CallbackData, prefix="teacher"):
@@ -22,9 +23,15 @@ class TeacherNotifyCallback(CallbackData, prefix="teacher"):
 
 
 def notice_keyboard(
-    buttons: list[tuple[str, str]], *, mute: NoticeCategory | None = None
+    buttons: list[tuple[str, str]],
+    *,
+    app: str | None = None,
+    mute: NoticeCategory | None = None,
 ) -> InlineKeyboardMarkup:
+    """Chat buttons first, then the same screen in the Mini App (`app` address), then mute."""
     rows = [[InlineKeyboardButton(text=label, callback_data=data)] for label, data in buttons]
+    if app:
+        rows.append([InlineKeyboardButton(text=APP_NOTICE_LABEL, web_app=WebAppInfo(url=app))])
     if mute is not None:
         rows.append(
             [

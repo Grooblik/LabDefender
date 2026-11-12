@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import DefenseSlot, User
 from labdefender.enums import Role
-from labdefender.handlers.coursework import format_label, send_text
+from labdefender.handlers.coursework import answer_no_groups, format_label, send_text
 from labdefender.keyboards.coursework import selection_keyboard
 from labdefender.keyboards.defense import StudentQueueCallback, TeacherQueueCallback
 from labdefender.services import queue as queue_service
@@ -36,7 +36,7 @@ async def show_queue_groups(
     action = ("assignments_new" if new else "assignments_view") if teacher else "assignments"
     page_action = ("groups_new" if new else "groups_view") if teacher else "groups"
     if not page.groups and not offset:
-        await message.answer("Нет доступных групп. Откройте /my_groups.")
+        await answer_no_groups(message, user)
         return
     await message.answer(
         "Выберите группу:",

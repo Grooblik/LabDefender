@@ -6,12 +6,13 @@ from pydantic import Field
 
 from labdefender.enums import Role
 from labdefender.keyboards.coursework import StudentCourseCallback, TeacherCourseCallback
+from labdefender.keyboards.defense import StudentQueueCallback, TeacherQueueCallback
 from labdefender.services.groups import GROUP_PAGE_SIZE, GroupPage
 
 
 class TeacherGroupCallback(CallbackData, prefix="teacher"):
     section: Literal["groups"] = "groups"
-    action: Literal["open", "invite", "list", "invite_list"]
+    action: Literal["open", "invite", "list", "invite_list", "create"]
     value: int = Field(ge=0, le=2**63 - 1)
 
 
@@ -63,7 +64,16 @@ def group_list_keyboard(
         )
     if navigation:
         rows.append(navigation)
+    if role == Role.TEACHER:
+        rows.append([create_group_button()])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def create_group_button() -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text="➕ Создать группу",
+        callback_data=TeacherGroupCallback(action="create", value=0).pack(),
+    )
 
 
 def teacher_group_keyboard(group_id: int) -> InlineKeyboardMarkup:
@@ -82,6 +92,14 @@ def teacher_group_keyboard(group_id: int) -> InlineKeyboardMarkup:
                     text="Проверить решения",
                     callback_data=TeacherCourseCallback(
                         action="review_list", object_id=group_id
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Слоты защиты и очередь",
+                    callback_data=TeacherQueueCallback(
+                        action="assignments_view", object_id=group_id
                     ).pack(),
                 )
             ],
@@ -109,18 +127,13 @@ def student_assignments_keyboard(group_id: int) -> InlineKeyboardMarkup:
                     text="Задания группы",
                     callback_data=StudentCourseCallback(action="list", object_id=group_id).pack(),
                 )
-            ]
-        ]
-    )
-
-
-def student_group_keyboard(group_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+            ],
             [
                 InlineKeyboardButton(
-                    text="Открыть группу",
-                    callback_data=StudentGroupCallback(action="open", value=group_id).pack(),
+                    text="Защита и очередь",
+                    callback_data=StudentQueueCallback(
+                        action="assignments", object_id=group_id
+                    ).pack(),
                 )
             ],
         ]

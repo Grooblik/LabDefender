@@ -8,4 +8,4 @@ if [ ! -f .venv/bin/python ]; then
     exit 1
 fi
 .venv/bin/python -m labdefender.tools doctor
-exec .venv/bin/python -m labdefender
+exec .venv/bin/python -m labdefender "$@"
