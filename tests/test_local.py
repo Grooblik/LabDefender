@@ -129,7 +129,11 @@ async def test_demo_has_all_statuses_and_queue_and_cannot_replace_existing_file(
         assert set(
             row[0] for row in connection.execute("SELECT DISTINCT status FROM submissions")
         ) == {"pending", "returned", "approved"}
-        assert connection.execute("SELECT COUNT(*) FROM queue_entries").fetchone()[0] == 2
+        # One slot holds works of two assignments: both ЛР 1 and the last student's ЛР 2.
+        assert connection.execute("SELECT COUNT(*) FROM queue_entries").fetchone()[0] == 3
+        assert connection.execute(
+            "SELECT COUNT(DISTINCT assignment_id), COUNT(DISTINCT slot_id) FROM queue_entries"
+        ).fetchone() == (2, 1)
         assert (
             connection.execute("SELECT role FROM users WHERE telegram_id=101").fetchone()[0]
             == "teacher"

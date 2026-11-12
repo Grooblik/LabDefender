@@ -287,15 +287,15 @@ async def notify_slot_opened(
     text = (
         ("Слот защиты снова открыт.\n" if reopened else "Открыт новый слот защиты.\n")
         + f"Группа: {context.group.name}\n"
-        + f"Задание: {context.assignment.title}\n"
         + f"{_slot_line(slot)}\n"
-        + f"Свободных мест: {slot.capacity - context.occupied}"
+        + f"Свободных мест: {slot.capacity - context.occupied}\n"
+        + "Записать можно любую допущенную работу этой группы."
     )
     markup = notice_keyboard(
         [("Записаться", StudentQueueCallback(action="choose", object_id=slot.id).pack())],
-        app=notifier.app_url(f"/defense/a/{context.assignment.id}"),
+        app=notifier.app_url(f"/defense/g/{context.group.id}"),
     )
-    students = await approved_unbooked_students(session, assignment_id=context.assignment.id)
+    students = await approved_unbooked_students(session, group_id=context.group.id)
     await notifier.send(bot, [Notice(student.telegram_id, text, markup) for student in students])
 
 
@@ -361,7 +361,8 @@ async def notify_queue_booking(
                 f"{'Смена слота защиты' if switched else 'Запись на защиту'}: "
                 f"{_person(context.student)}.\n"
                 f"Группа: {context.group.name}\n"
-                f"Задание: {context.assignment.title}\n"
+                f"Задание: {context.assignment.title} · "
+                f"попытка №{context.submission.attempt_number}\n"
                 f"{_slot_line(slot.slot)}\n"
                 f"Записано: {slot.occupied} из {slot.slot.capacity}.",
                 notice_keyboard(

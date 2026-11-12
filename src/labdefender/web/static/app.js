@@ -5,6 +5,7 @@ import * as router from "./lib/router.js";
 import { initData, setupChrome, webApp } from "./lib/telegram.js";
 import { homeView } from "./views/home.js";
 import { registerProfileRoutes } from "./views/profile.js";
+import { registerReportRoutes } from "./views/reports.js";
 import { registerSlotRoutes } from "./views/slots.js";
 import { registerStudentRoutes } from "./views/student.js";
 import { registerTeacherRoutes } from "./views/teacher.js";
@@ -45,6 +46,7 @@ async function start() {
   registerStudentRoutes(ctx);
   registerTeacherRoutes(ctx);
   registerProfileRoutes(ctx);
+  registerReportRoutes(ctx);
   router.start(launchScreen());
 }
 

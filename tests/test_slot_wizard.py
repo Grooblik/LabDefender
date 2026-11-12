@@ -59,8 +59,8 @@ def buttons(bot):
 
 
 async def open_wizard(dispatcher, bot):
+    # «Новый слот» → group: slots belong to a group, there is no assignment step.
     await dispatcher.feed_update(bot, message_update("/new_slot"))
-    await press(dispatcher, bot, first_button(bot))
     await press(dispatcher, bot, first_button(bot))
 
 
@@ -269,7 +269,7 @@ async def test_template_of_another_teacher_is_rejected(context, bot):
     async with sessions() as session:
         group = await create_group(session, actor_id=ids[303], name="Чужая")
     async with sessions() as session:
-        assignment = await create_assignment(
+        await create_assignment(
             session,
             actor_id=ids[303],
             group_id=group.id,
@@ -281,7 +281,7 @@ async def test_template_of_another_teacher_is_rejected(context, bot):
         foreign = await create_defense_slot(
             session,
             actor_id=ids[303],
-            assignment_id=assignment.id,
+            group_id=group.id,
             day_date=TODAY + timedelta(days=1),
             start_time=time(9),
             end_time=time(10),

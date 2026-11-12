@@ -1,6 +1,6 @@
-# Устройство и контракты модулей
+# Подключение модулей
 
-## Точки входа
+## Что уже доступно
 
 - `labdefender.app.create_dispatcher(session_factory, settings=settings, notifier=...)`
   подключает общий роутер (внутри — сначала меню разделов, затем регистрация),
@@ -10,7 +10,7 @@
   `run()` передаёт `Notifier(background=True, delay=0.05, webapp_url=...)`.
 - Обработчики работают в личном чате. Групповые сообщения и inline-mode callbacks
   не входят в MVP.
-- Для Mini App `run()` при заданном `WEBAPP_URL` (или запуске с `--tunnel`)
+- Mini App, этапы 0–6: `run()` при заданном `WEBAPP_URL` (или запуске с `--tunnel`)
   поднимает в том же процессе веб-сервер `labdefender.web` с общими `Notifier`
   и FSM-хранилищем бота, ставит кнопку «Приложение» и проверяет, что публичный адрес
   ведёт в этот процесс; `/start`, `/app`, помощь и уведомления дают кнопки с текущим
@@ -31,7 +31,7 @@
 - «📝 Новое задание» (`/new_assignment`) и «📥 На проверку» (`/submissions`) работают
   у преподавателя, «📚 Задания» (`/assignments`) — у студента. Кнопки заданий, проверки
   и очереди подключены к карточкам групп.
-- «🕒 Новый слот» (`/new_slot`) создаёт слот защиты для задания через мастер с кнопками
+- «🕒 Новый слот» (`/new_slot`) создаёт слот защиты для группы через мастер с кнопками
   (календарь, сетка времени, длительность, места, повтор прошлого слота) или ручной
   текстовый ввод. «🗓 Защита и очередь» (`/queue`) работает для обеих ролей, переход
   студента к записи также есть в карточке допущенного задания.
@@ -55,7 +55,7 @@
   (`/notifications`) работает для обеих ролей: преподаватель управляет категориями, студент видит,
   что его уведомления не отключаются. Контракт — в разделе «Уведомления».
 
-## Структура обработчиков
+## Где писать
 
 У каждого ролевого модуля своя папка в `handlers/`. Кнопки и состояния кладём
 в `keyboards/student.py`, `keyboards/teacher.py`, `states/student.py`,
@@ -64,19 +64,45 @@
 Общие файлы `app.py`, `config.py`, `enums.py`, `db/`, `middlewares/`,
 `handlers/common.py`, `handlers/menu.py`, `handlers/registration.py`,
 `handlers/notifications.py`, `keyboards/menu.py`, `services/users.py`,
-`services/notifications.py`, `web/` и `tunnel.py` обслуживают обе роли. Изменения
-схемы требуют миграции для совместимости с существующими SQLite-базами.
+`services/notifications.py`, `web/`, `tunnel.py` меняет автор ядра. Изменения схемы сначала
+согласовываем: иначе разработчики получат несовместимые локальные SQLite-базы.
+Остальные сервисы закрепляем за одним человеком на этапе реализации.
 
-Ролевой модуль обрабатывает callback и шаги ввода. Точки входа в раздел
-(кнопки и команды) регистрируются в `handlers/menu.py`. Например,
-`handlers/student/defense.py` создаёт роутер записи и очереди,
-а `handlers/student/__init__.py` подключает его через
-вызов `router.include_routers(..., defense.create_router())`. Фабрики создают отдельные
-роутеры для каждого экземпляра Dispatcher, в том числе в тестах.
+Ролевой модуль держит callback и шаги ввода, а **вход в раздел** (кнопка меню и её
+команда) регистрируется в ядре, в `handlers/menu.py`. Пример нового файла
+`handlers/student/reports.py`:
 
-Чтобы добавить раздел меню, определите кнопку в `MenuButton`, расположение
-в `MENU_LAYOUT` и команду в `MENU_COMMANDS`. Зарегистрируйте обработчик
-в `handlers/menu.py` и очищайте состояние предыдущего диалога при входе.
+```python
+from aiogram import Router
+from aiogram.types import CallbackQuery, Message
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from labdefender.db.models import User
+from labdefender.keyboards.student import ReportCallback  # CallbackData, prefix="student"
+
+
+async def show_reports(message: Message, session: AsyncSession, current_user: User) -> None:
+    # Здесь вызвать общий сервис с current_user.id: он сам ограничивает доступ.
+    await message.answer("Пока нет отчётов.")
+
+
+def create_router() -> Router:
+    router = Router(name="student_reports")
+
+    @router.callback_query(ReportCallback.filter())
+    async def report_action(callback: CallbackQuery) -> None:
+        await callback.answer()
+
+    return router
+```
+
+В `handlers/student/__init__.py` импортируем модуль и внутри `create_router()`
+перед `return router` вызываем `router.include_router(reports.create_router())`.
+У преподавателя — аналогично. Фабрики создают новые роутеры при каждом запуске,
+что позволяет собирать Dispatcher в тестах. Не создаём второго Dispatcher или Bot
+внутри модуля. Новый раздел меню согласуем с автором ядра: текст в `MenuButton`,
+место в `MENU_LAYOUT`, команда в `MENU_COMMANDS` и обработчик в `handlers/menu.py`
+(`entry(MenuButton.X, "command")`, `state.clear()`, вызов `show_reports`).
 
 Сначала регистрируем точные callback, затем обработчики ввода с фильтром
 конкретного FSM-состояния. Общий обработчик «любое сообщение» в ролевом модуле
@@ -129,8 +155,9 @@
 
 ## Mini App
 
-Mini App открывает группы, задания, проверку, слоты и очередь обеих ролей, профиль
-и настройки уведомлений. Авторизация и маршруты устроены следующим образом.
+Готовы этапы 0–6: каркас, задания и сдача, проверка, группы, слоты и очередь обеих
+ролей, профиль, код преподавателя, выдача роли, настройки уведомлений, кнопки
+приложения под уведомлениями, постоянный туннель и проверка адреса. Устройство:
 
 - `config.Settings`: `webapp_url` (публичный `https://` без параметров и `/` в конце;
   пусто — Mini App выключена), `web_host` (`127.0.0.1`), `web_port` (`8080`),
@@ -225,14 +252,14 @@ API (`web/api/`, все ответы JSON, списки — `{"items": [...], "o
 | `PUT /api/notifications` | тело `{"category": "submissions"\|"joins"\|"queue"\|"all", "enabled": bool}`; те же `categories`; повтор ничего не меняет |
 | `GET /api/groups` | свои группы: `id`, `name` (`list_groups`) |
 | `GET /api/groups/{id}/assignments` | `group` и задания: `id`, `group_id`, `title`, `format`, `format_label` |
-| `GET /api/assignments/{id}/slots` | `assignment` и слоты (`list_defense_slots`; студенту — после допуска) |
-| `GET /api/assignments/{id}/unassigned` | допущенные без записи: `name` (только преподаватель) |
-| `GET /api/assignments/{id}/calendar?page=N` | `range_label`, `pages`, `leading` (пустые клетки до первого дня), `weekdays`, `days`: `date`, `day`, `month`, `marked`, `today` |
-| `GET /api/assignments/{id}/day?date=YYYY-MM-DD` | `date_label`, `weekday`, `busy`, `starts` с `durations` (`minutes`, `end`, `label`), `template` или `null`, `capacities`; прошедшая дата — 422 |
-| `POST /api/assignments/{id}/slots` | тело `{"date", "start": "HH:MM", "end", "capacity"}`, `Idempotency-Key`; 201 `{"slot"}` и уведомление допущенным без записи |
-| `GET /api/slots/{id}/queue` | `assignment`, `slot` и участники: `position`, `name` |
+| `GET /api/groups/{id}/slots` | `group` и слоты группы (`list_defense_slots`; студенту — будущие) |
+| `GET /api/groups/{id}/unassigned` | допущенные работы без записи: `name`, `assignment_title`, `attempt_number` (только преподаватель) |
+| `GET /api/groups/{id}/calendar?page=N` | `range_label`, `pages`, `leading` (пустые клетки до первого дня), `weekdays`, `days`: `date`, `day`, `month`, `marked`, `today` |
+| `GET /api/groups/{id}/day?date=YYYY-MM-DD` | `date_label`, `weekday`, `busy`, `starts` с `durations` (`minutes`, `end`, `label`), `template` или `null`, `capacities`; прошедшая дата — 422 |
+| `POST /api/groups/{id}/slots` | тело `{"date", "start": "HH:MM", "end", "capacity"}`, `Idempotency-Key`; 201 `{"slot"}` и уведомление студентам с допущенной работой без записи |
+| `GET /api/slots/{id}/queue` | `group`, `slot` и участники: `position`, `name`, `username`, `assignment_id`, `assignment_title`, `attempt_number` |
 | `POST /api/slots/{id}/close`, `…/reopen` | `{"slot"}`; `reopen` добавляет `reopened` и уведомляет только при реальном открытии |
-| `DELETE /api/slots/{id}` | `{"deleted": true, "assignment_id"}`; слот с записями — 409 |
+| `DELETE /api/slots/{id}` | `{"deleted": true, "group_id"}`; слот с записями — 409 |
 | `POST /api/groups` | тело `{"name"}`, `Idempotency-Key`; 201 `{"group"}` (только преподаватель) |
 | `GET /api/groups/{id}` | `group`, `members`; преподавателю ещё `invite_link` |
 | `GET /api/groups/{id}/members` | только преподаватель группы (`list_members`): `group` и студенты `name`, `username` по имени; студенту 403, чужому преподавателю 404 |
@@ -246,7 +273,11 @@ API (`web/api/`, все ответы JSON, списки — `{"items": [...], "o
 | `POST /api/submissions/{id}/send-file` | бот присылает файл попытки в чат того, кто нажал; без файла — 422 |
 | `GET /api/review` | ожидающие проверки попытки во всех группах преподавателя (`list_pending_reviews`), сначала давние; у каждой `assignment` и `group_name` |
 | `POST /api/submissions/{id}/approve`, `…/return` | `return` с телом `{"comment"}`; `{"submission"}` и уведомление студенту; повтор — 409 |
-| `GET /api/assignments/{id}/booking` | после допуска: `assignment`, `booking` (`slot`, `position`, `occupied`, `entry_id`, `order_at`, `can_move`) или `null`; без допуска — 409 |
+| `GET /api/groups/{id}/defense` | студенту: `group` и `works` — допущенные работы (`assignment`, `attempt_number`, `booking` со `slot`, `position`, `occupied` или `null`) |
+| `GET /api/groups/{id}/report` | преподавателю группы: `group`, `assignments`, `rows` (`student` с `id`, `approved`, `cells`: `status`, `status_label`, `attempts`, `submitted_label`, `approved_label`, `defense_label`, `short`, `full`), `totals` (`approved`, `submitted`) |
+| `GET /api/students/{id}/report`, `GET /api/me/report` | отчёт студента: `student`, `disciplines` (`group`, `approved`, `total`, `rows`: `assignment` и поля ячейки); преподавателю — только его группы, иначе 404 |
+| `POST /api/groups/{id}/report/file`, `/api/students/{id}/report/file`, `/api/me/report/file` | бот присылает CSV в чат нажавшего; `{"sent": true}`; бот не может написать — 409 |
+| `GET /api/assignments/{id}/booking` | после допуска: `assignment`, `attempt_number`, `booking` (`slot`, `position`, `occupied`, `entry_id`, `order_at`, `can_move`) или `null`; без допуска — 409 |
 | `POST /api/assignments/{id}/enroll` | тело `{"slot_id", "expected_entry_id", "expected_order_at"}` из показанной записи; `{"booking"}`; уведомление преподавателю при реальном изменении |
 | `POST /api/assignments/{id}/move-to-end` | тело `{"expected_entry_id", "expected_order_at"}`; `{"booking"}` |
 
@@ -259,7 +290,7 @@ API (`web/api/`, все ответы JSON, списки — `{"items": [...], "o
 
 Изменяющий эндпоинт вызывает сервис **до** любых чтений в сессии запроса: сервис сам
 открывает `BEGIN IMMEDIATE`, а начатое чтение мешает этому (поэтому запись на слот —
-`/api/assignments/{id}/enroll` с `slot_id` в теле, принадлежность слота заданию
+`/api/assignments/{id}/enroll` с `slot_id` в теле, принадлежность слота группе задания
 проверяет `enroll_slot`). Чтения для ответа — после сервиса.
 
 Новые общие функции: `services.submissions.list_pending_reviews`,
@@ -290,7 +321,9 @@ API (`web/api/`, все ответы JSON, списки — `{"items": [...], "o
   с «Показать ещё», вывод ошибок (401 — «Закрыть приложение»);
 - `views/common.js` — выбор группы и задания, сообщение после действия (`ctx.flash`),
   подписи слотов, многострочный текст; `views/home.js` — главный экран;
-  `views/slots.js`, `views/new-slot.js` — слоты преподавателя; `views/student.js` —
+  `views/slots.js`, `views/new-slot.js` — слоты группы у преподавателя (`#/slots/g/{id}`,
+  `#/slots/a/{id}` из старых ссылок ведёт в группу задания); `views/reports.js` —
+  `#/reports`, `#/groups/{id}/report`, `#/students/{id}/report`, `#/report`; `views/student.js` —
   `#/tasks/…` и `#/defense/…`; `views/teacher.js` — `#/review`, `#/groups/…`, `#/work/…`;
   `views/attempt.js` — карточка попытки (`#/review/s/…`, `#/work/s/…`, `#/tasks/s/…`);
   `views/profile.js` — `#/profile` (имя, Telegram ID, вход к коду и выдаче роли),
@@ -301,13 +334,15 @@ API (`web/api/`, все ответы JSON, списки — `{"items": [...], "o
 
 Экраны для кнопок уведомлений: `/review/s/{submission}` (новое решение),
 `/tasks/a/{assignment}` (новое задание, возврат), `/defense/a/{assignment}` (допуск,
-новый слот), `/groups/{group}` (вступление), `/slots/s/{slot}` (запись на слот).
+новый слот → `/defense/g/{group}`), `/groups/{group}` (вступление), `/slots/s/{slot}`
+(запись на слот).
 Переименовывая маршрут страницы, обновите и `handlers/notifications.py`.
 
 Тесты — тестовый сервер aiohttp и `initData`, подписанные тестовым токеном
 (`tests/test_web.py` — каркас, туннели, `/health` и проверка адреса,
 `tests/test_web_slots.py`, `tests/test_web_coursework.py` — там кнопка файла
-проверяется до сдачи файла в чате через общий диспетчер, `tests/test_web_profile.py` —
+проверяется до сдачи файла в чате через общий диспетчер, `tests/test_reports.py` — отчёты:
+права, ячейки, CSV, чат и API, `tests/test_web_profile.py` —
 профиль, код, выдача роли, уведомления и их кнопки); проверка, что каждый относительный
 `import` страницы указывает на существующий файл и экспортируемое имя.
 
@@ -353,7 +388,7 @@ transaction-блока. Методы чтения commit не делают. Вс
 транзакция бизнес-операции не захватывает обновление Telegram-профиля. Чтение через
 SQLAlchemy само начинает транзакцию: не вызываем `session.begin()` после такого
 чтения без завершения предыдущей. В критичных операциях очередь сначала берёт
-блокировку, затем проверяет состояние и свободные места.
+блокировку, затем проверяет состояние и свободные места; реализация — этап 5.
 
 Успешный `RoleFilter` проверяет только роль. Сервис обязан проверять владельца
 группы/попытки, участие в группе и принадлежность слота заданию. Существование ID
@@ -456,17 +491,27 @@ async with immediate_transaction(session):
 
 ## Слоты защиты и очередь: готовый контракт
 
+Очередь принадлежит группе (дисциплине): `DefenseSlot.group_id`. Место в слоте — одна
+работа: `QueueEntry` хранит `submission_id` (допущенная попытка), `student_id`
+и `assignment_id`; пара `(student_id, assignment_id)` уникальна. В один слот встают
+работы разных заданий группы; студент может записать несколько своих работ.
+
 Ролевые обработчики — `handlers/student/defense.py`, `handlers/teacher/defense.py`,
 мастер создания слота — `handlers/teacher/slots.py`, общий показ — `handlers/defense.py`.
 Callback находятся в `keyboards/defense.py`: `student:queue:...`, `teacher:queue:...`,
-`student:queue_confirm:...`, `teacher:day_confirm:...`; кнопки мастера —
+`student:queue_confirm:...`, `teacher:day_confirm:...`. Преподаватель:
+`groups_new`/`groups_view` → группа → `slots`/`create`, `unbooked`, по слоту — `open`,
+`close`, `reopen`, `cancel`; кнопки до общей очереди (`assignments_*`, `new`, `days`
+с заданием) ведут в группу задания. Студент: `groups` → `assignments` (его работы
+в группе), `slots`, `choose` (слот → выбор работы), `pick` (работа + `slot_id`),
+`days` (слоты для одной работы), `status`, `move`. Кнопки мастера —
 в `keyboards/slots.py`: `teacher:slot:<action>:<value>:<nonce>`. FSM `DefenseSlotCreation`
 и `QueueChange` хранят только черновик и снимок своей записи для подтверждения.
 
 ### Мастер слота
 
-`start_slot_wizard(message, session, user, state, assignment_id=...)` проверяет роль
-и владельца задания, затем открывает календарь. Шаги — состояния `DefenseSlotCreation`:
+`start_slot_wizard(message, session, user, state, group_id=...)` проверяет, что группа
+своя, затем открывает календарь. Шаги — состояния `DefenseSlotCreation`:
 `date → start_time → end_time → capacity → confirmation`. На каждом шаге
 принимается и кнопка, и текст (`YYYY-MM-DD`, `HH:MM`, число), поэтому пресеты
 необязательны. При входе в шаг черновик теряет значения следующих шагов и получает
@@ -491,37 +536,42 @@ Callback мастера, включая ID шаблона до `2**63 − 1`, у
 
 Все операции используют общий `services/queue.py`:
 
-- `create_defense_slot(session, actor_id=..., assignment_id=..., day_date=...,
+- `create_defense_slot(session, actor_id=..., group_id=..., day_date=...,
   start_time=..., end_time=..., capacity=...)`
-  возвращает `DefenseSlot`; проверяет роль преподавателя, владельца, дату и время
-  по Москве, `start_time < end_time` и положительный целый лимит. Пара
-  «задание + дата + начало» уникальна, пересекающиеся слоты задания отклоняются.
-  Повтор тех же параметров безопасен; изменение лимита существующего слота отклоняется.
-- `list_slots_between(session, actor_id=..., assignment_id=..., first_day=..., last_day=...)`
-  возвращает кортеж `DefenseSlot` задания за период включительно, по дате и началу.
+  возвращает `DefenseSlot`; проверяет владельца группы, дату и время по Москве,
+  `start_time < end_time` и положительный целый лимит. Слоты группы не пересекаются;
+  повтор тех же параметров (та же группа, дата и начало) возвращает существующий слот,
+  другой лимит — отказ. Уникального ограничения в базе нет: после миграции два бывших
+  слота разных заданий на одно время остаются отдельными.
+- `list_slots_between(session, actor_id=..., group_id=..., first_day=..., last_day=...)`
+  возвращает кортеж `DefenseSlot` группы за период включительно, по дате и началу.
   Только для преподавателя-владельца; нужен мастеру для отметок и скрытия занятого времени.
-- `latest_slot_template(session, actor_id=..., assignment_id=...)` возвращает последний
-  созданный слот преподавателя с приоритетом: это задание, затем его группа, затем любой
-  свой слот. `None`, если слотов нет. Используется кнопкой «Как в прошлый раз».
+- `latest_slot_template(session, actor_id=..., group_id=...)` возвращает последний
+  созданный слот преподавателя: сначала этой группы, затем любой своей. `None`, если
+  слотов нет. Используется кнопкой «Как в прошлый раз».
 - `require_approved(session, actor_id=..., assignment_id=...)` возвращает последнюю
   собственную `APPROVED`-попытку студента с `approved_at` или выбрасывает ошибку.
-- `list_defense_slots(session, actor_id=..., assignment_id=..., offset=0)` возвращает
-  `Page[SlotItem]`; у элемента есть `slot` и `occupied`. Студенту нужны допуск и
-  участие в группе; ему показываются только актуальные и будущие слоты.
+- `list_defense_slots(session, actor_id=..., group_id=..., offset=0)` возвращает
+  `Page[SlotItem]`; у элемента есть `slot` и `occupied`. Студенту группы показываются
+  только актуальные и будущие слоты (допуск для просмотра не нужен, для записи — нужен).
   Преподаватель своей группы видит и прошлые слоты.
 - `get_defense_slot(session, actor_id=..., slot_id=...)` возвращает `SlotItem`
-  с проверкой доступа к заданию. Сам по себе этот метод не разрешает запись:
+  с проверкой доступа к группе слота (`require_defense_slot_access`: её преподаватель
+  или студент; остальным — «не найдено»).
+- `list_defense_works(session, actor_id=..., group_id=...)` — студенту: его допущенные
+  работы группы (`DefenseWork`: `assignment`, `submission`, `booking` или `None`). Сам по себе этот метод не разрешает запись:
   допуск, время и флаг `is_open` повторно проверяет сервис изменения очереди.
 - `get_student_booking(session, actor_id=..., assignment_id=...)` возвращает
   `StudentBooking` (`entry`, `slot`, `position`, `occupied`) либо `None`.
   Доступна только собственная запись студента.
 - `get_slot_queue(session, actor_id=..., slot_id=..., offset=0)` возвращает
   `SlotQueue` (`slot`, `occupied`, `members`). `members` — `Page[QueueMember]`,
-  элементы содержат `entry_id`, `submission_id`, `student_name`, `position`.
+  элементы содержат `entry_id`, `submission_id`, `student_name`, `student_username`,
+  `position`, `assignment_id`, `assignment_title`, `attempt_number`.
   Это преподавательский метод; чужие группы и студенты к списку имён не допускаются.
 - `enroll_slot(session, actor_id=..., assignment_id=..., slot_id=...,
-  expected_entry_id=..., expected_order_at=...)` создаёт или перемещает одну запись
-  и возвращает `QueueEntry`. Для первой записи передайте `None, None`.
+  expected_entry_id=..., expected_order_at=...)` создаёт или перемещает запись этой
+  работы и возвращает `QueueEntry`; слот должен быть из группы задания, иначе «не найдено». Для первой записи передайте `None, None`.
   Для смены слота — ID и UTC-время `order_at` из предыдущего `StudentBooking.entry`.
 - `move_to_end(session, actor_id=..., assignment_id=..., expected_entry_id=...,
   expected_order_at=...)` переносит собственную запись в конец выбранного слота
@@ -530,9 +580,11 @@ Callback мастера, включая ID шаблона до `2**63 − 1`, у
   записей и возвращает `DefenseSlot`. `reopen_defense_slot(...)` открывает будущий слот
   и возвращает `ReopenSlotResult` (`slot`, `reopened`); `reopened` — `False`, если слот
   уже был открыт и ничего не изменилось. `cancel_defense_slot(...)` удаляет только пустой слот.
-- `approved_unassigned_query(assignment_id, *columns)` — общий запрос «последняя
-  попытка допущена, записи нет»; права не проверяет. Его используют
-  `list_approved_unassigned` и выбор получателей уведомления о новом слоте.
+- `approved_unassigned_query(group_id, *columns)` — общий запрос «последняя попытка
+  задания группы допущена, записи нет» (по паре студент + задание); права не проверяет.
+  Его используют `list_approved_unassigned(session, actor_id=..., group_id=..., offset=0)`
+  (`Page[UnbookedWork]`: `submission`, `student_name`, `assignment_title`) и выбор
+  получателей уведомления о новом слоте (`approved_unbooked_students(group_id=...)`).
 
 `create_defense_slot`, `enroll_slot` и `move_to_end` сами открывают
 `immediate_transaction`; вызывайте их до любого чтения в свежей сессии update.
@@ -579,7 +631,8 @@ commit: повтор доставки кнопки не переносит за�
   преподавателю группы, категория `submissions`;
 - `notify_submission_reviewed(..., submission_id=...)` — автору о допуске или возврате;
 - `notify_assignment_published(..., assignment_id=...)` — всем студентам группы;
-- `notify_slot_opened(..., slot_id=..., reopened=False)` — допущенным без записи,
+- `notify_slot_opened(..., slot_id=..., reopened=False)` — студентам группы с допущенной
+  работой без записи (`SlotContext`: `slot`, `group`, `occupied`),
   только для открытого будущего слота с местами;
 - `notify_student_joined(..., group_id=..., student_id=...)` — преподавателю,
   категория `joins`; вызывать только при `JoinGroupResult.joined`;
@@ -616,7 +669,28 @@ commit: повтор доставки кнопки не переносит за�
   `approved_unbooked_students` — чтения для подготовки уведомления. Права не проверяют:
   вызываются только после авторизованного и сохранённого действия.
 
-## Схема данных
+## Отчёты: готовый контракт
+
+`services/reports.py` только читает:
+
+- `group_report(session, actor_id=..., group_id=...)` → `GroupReport` (`group`,
+  `assignments`, `students` по имени, `cell(student_id, assignment_id)` → `WorkCell`,
+  `approved_count(student_id)`); только владелец группы.
+- `student_report(session, actor_id=..., student_id=None)` → `StudentReport` (`student`,
+  `disciplines`: `group` и `rows` — пары `(Assignment, WorkCell)`). Студент — только сам,
+  все свои группы; преподаватель — студент своих групп и только эти группы, иначе
+  `ObjectUnavailable`.
+- `WorkCell`: `status` последней попытки (`None` — не сдано), `attempts`, `submitted_at`,
+  `approved_at`, `slot` записи; подписи `status_label`, `defense_label`, `short`
+  (ячейка таблицы), `full` (строка файла). `moscow(moment, pattern)` — время по Москве.
+
+`handlers/reports.py`: `group_report_csv`, `student_report_csv` (CSV `;`, UTF-8 BOM, защита
+от формул в начале значения), `send_group_report`/`send_student_report` (файл в чат через
+`BufferedInputFile`), роутер `/report` и callback `report:<group|groups|me>:<id>`
+(`keyboards/reports.py`: `ReportCallback`, `group_report_button`, `my_report_button`).
+API — `web/api/reports.py`.
+
+## Общая схема после добавления форматов и слотов
 
 Модели импортируются из `labdefender.db.models`. Таблицы создаются при запуске.
 
@@ -629,9 +703,13 @@ commit: повтор доставки кнопки не переносит за�
   `status`, `content` или `file_id`, `review_comment`, `submitted_at`, `approved_at`.
   Номер попытки положителен и уникален внутри задания и студента. Возврат требует
   комментария, допуск — времени; CHECK-ограничения проверяют тип полезной нагрузки.
-- `DefenseSlot`: `id`, `assignment_id`, `date`, `start_time`, `end_time`,
+- `DefenseSlot`: `id`, `group_id`, `date`, `start_time`, `end_time`,
   положительный `capacity`, `is_open`; уникальна тройка `(assignment_id, date, start_time)`.
-- `QueueEntry`: `id`, `slot_id`, уникальный `submission_id`, `order_at`.
+- `QueueEntry`: `id`, `slot_id`, уникальный `submission_id`, `student_id`, `assignment_id`
+  (уникальная пара), `order_at`. Схема прежних версий переводится `tools migrate`
+  (`migrations.py`: состояния `legacy` → `slots` → `new`, копия перед изменением);
+  `run()` и `doctor` на непереведённой базе останавливаются, `backup`/`check_database(...,
+  allow_outdated=True)` её принимают.
 - `TeacherRegistrationAttempt`: `user_id` как PK/FK, `failed_attempts`,
   `window_started_at`. Хранит только счётчик и начало окна, не код.
 - `NotificationSetting`: `user_id` как PK/FK, флаги `submissions`, `joins`, `queue`.
@@ -668,7 +746,7 @@ erDiagram
     User ||--o| NotificationSetting : configures
 ```
 
-## Общие сервисы
+## Готовность общих сервисов
 
 Уже реализованы `services.users.ensure_user`, `services.auth.register_teacher`,
 `services.auth.grant_teacher`, проверки `services.access`, сервисы заданий
@@ -685,7 +763,7 @@ erDiagram
 объектов передаём явно. Сервисы не зависят от `Message`, `CallbackQuery` и FSM.
 Лимит файла — в общем сервисе, повторная проверка перед записью обязательна.
 
-## Локальные проверки
+## Проверка перед интеграцией
 
 Из корня репозитория после установки dev-зависимостей:
 
@@ -698,16 +776,3 @@ python -m ruff format --check .
 Тесты не используют настоящий токен и не обращаются в Telegram. Для ручного
 smoke-теста нужен свой бот из BotFather; не запускаем один токен одновременно
 на нескольких компьютерах.
-
-## Версия релиза
-
-Версия в Git-теге совпадает с `project.version` в `pyproject.toml`. Для первого
-релиза используйте `v0.1.0`. После слияния изменений и успешной проверки Ruff
-поставьте аннотированный тег на проверенный коммит в `main`.
-
-```sh
-git switch main
-git pull --ff-only origin main
-git tag -a v0.1.0 -m "LabDefender v0.1.0"
-git push origin v0.1.0
-```

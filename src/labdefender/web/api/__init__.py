@@ -2,9 +2,9 @@
 
 from aiohttp import web
 
-from labdefender.web.api import courses, defense, notifications, profile, submissions
+from labdefender.web.api import courses, defense, notifications, profile, reports, submissions
 
 
 def add_routes(app: web.Application) -> None:
-    for module in (profile, courses, defense, submissions, notifications):
+    for module in (profile, courses, defense, submissions, notifications, reports):
         app.add_routes(module.routes)

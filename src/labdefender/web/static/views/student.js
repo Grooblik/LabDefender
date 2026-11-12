@@ -41,13 +41,7 @@ export function registerStudentRoutes(ctx) {
       open: (group) => `/defense/g/${group.id}`,
     }),
   );
-  route("/defense/g/:group", (params, view) =>
-    pickAssignment(ctx, view, params.group, {
-      back: () => go("/defense"),
-      open: (assignment) => `/defense/a/${assignment.id}`,
-      subtitle: (assignment) => assignment.status_label,
-    }),
-  );
+  route("/defense/g/:group", (params, view) => groupDefenseView(ctx, view, params.group));
   route("/defense/a/:assignment", (params, view) => defenseView(ctx, view, params.assignment));
 }
 
@@ -192,12 +186,62 @@ function attemptsView(ctx, view, assignmentId) {
   );
 }
 
+function bookingLabel(booking) {
+  return `${slotLabel(booking.slot)}, позиция ${booking.position} из ${booking.occupied}`;
+}
+
+// The student's approved works of a group: each one books its own place in a slot.
+async function groupDefenseView(ctx, view, groupId) {
+  view.back(() => go("/defense"));
+  const flash = takeFlash(ctx);
+  const data = await load(ctx, view, `/groups/${groupId}/defense`, () => groupDefenseView(ctx, view, groupId));
+  if (!data) return;
+  mount(
+    ctx.root,
+    title("Защита", data.group.name),
+    flash,
+    section(
+      "Допущенные работы",
+      data.works.length
+        ? h(
+            "div",
+            { class: "list" },
+            data.works.map((work) =>
+              item({
+                text: `${work.assignment.title} · попытка №${work.attempt_number}`,
+                subtitle: work.booking ? bookingLabel(work.booking) : "Не записана — выберите слот",
+                badge: work.booking ? null : "записать",
+                onClick: () => go(`/defense/a/${work.assignment.id}`),
+              }),
+            ),
+          )
+        : notice("Допущенных работ пока нет: запись откроется после допуска.", "info"),
+    ),
+    section(
+      "Слоты группы",
+      h("p", { class: "hint" }, "Каждая работа занимает своё место. Чтобы записать работу, выберите её выше."),
+      pagedList(
+        (offset) => api(`/groups/${groupId}/slots?offset=${offset}`),
+        (slot) =>
+          h(
+            "div",
+            { class: "row" },
+            h("div", { class: "item-title" }, slotLabel(slot)),
+            h("div", { class: "item-subtitle" }, `Записано: ${slot.occupied} из ${slot.capacity}` + (slotBadge(slot) ? ` · ${slotBadge(slot)}` : "")),
+          ),
+        { empty: "Слотов пока нет. Когда преподаватель откроет слот, придёт уведомление." },
+      ),
+    ),
+  );
+}
+
 async function defenseView(ctx, view, assignmentId) {
   view.back(() => go("/defense"));
   const flash = takeFlash(ctx);
   const data = await load(ctx, view, `/assignments/${assignmentId}/booking`, () => defenseView(ctx, view, assignmentId));
   if (!data) return;
   const { assignment, booking } = data;
+  const work = `${assignment.title} · попытка №${data.attempt_number}`;
   view.back(() => go(`/defense/g/${assignment.group_id}`));
   const errors = h("div", {});
   const version = {
@@ -222,8 +266,8 @@ async function defenseView(ctx, view, assignmentId) {
   function choose(slot) {
     const switching = booking !== null;
     const question =
-      `${switching ? "Сменить слот на" : "Записаться на"} ${slot.date_label} · ${slot.time_label} (Москва)?` +
-      (switching ? " В новом слоте вы окажетесь в конце очереди." : "");
+      `${switching ? "Перенести работу" : "Записать работу"} «${work}» на ${slot.date_label} · ${slot.time_label} (Москва)?` +
+      (switching ? " В новом слоте она окажется в конце очереди." : "");
     act(`/assignments/${assignmentId}/enroll`, question, "Запись сохранена.", { slot_id: slot.id });
   }
 
@@ -257,14 +301,14 @@ async function defenseView(ctx, view, assignmentId) {
 
   mount(
     ctx.root,
-    title("Защита", assignment.title),
+    title("Защита", work),
     flash,
     current,
     errors,
     section(
       booking ? "Сменить слот" : "Слоты защиты",
       pagedList(
-        (offset) => api(`/assignments/${assignmentId}/slots?offset=${offset}`),
+        (offset) => api(`/groups/${assignment.group_id}/slots?offset=${offset}`),
         (slot) => {
           const mine = booking && booking.slot.id === slot.id;
           const full = slot.occupied >= slot.capacity;

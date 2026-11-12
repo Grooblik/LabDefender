@@ -93,34 +93,32 @@ async def test_teacher_navigates_groups_and_assignments(context, client):
 async def test_calendar_marks_dates_with_slots_and_pages_like_the_chat(context, client):
     _, _, _, assignment, _ = context
     await day(context, day_date=TOMORROW)
-    calendar = await call(client, "GET", f"/assignments/{assignment.id}/calendar")
-    assert calendar["assignment"]["title"] == "ЛР 1"
+    calendar = await call(client, "GET", f"/groups/{context[2].id}/calendar")
+    assert calendar["group"]["name"] == "ИВТ-101"
     assert (calendar["page"], calendar["leading"], calendar["weekdays"][0]) == (0, 1, "Пн")
     assert calendar["range_label"] == "10–28 ноября 2026"
     days = calendar["days"]
     assert (days[0]["date"], days[-1]["date"], len(days)) == ("2026-11-10", "2026-11-28", 19)
     assert days[0]["today"] and not days[1]["today"]
     assert [entry["date"] for entry in days if entry["marked"]] == [TOMORROW.isoformat()]
-    second = await call(client, "GET", f"/assignments/{assignment.id}/calendar?page=1")
+    second = await call(client, "GET", f"/groups/{context[2].id}/calendar?page=1")
     assert second["days"][0]["date"] == "2026-11-29"
     pages = calendar["pages"]
-    await call(client, "GET", f"/assignments/{assignment.id}/calendar?page={pages}", status=422)
-    await call(client, "GET", f"/assignments/{assignment.id}/calendar", user=STUDENT, status=403)
-    await call(
-        client, "GET", f"/assignments/{assignment.id}/calendar", user=OTHER_TEACHER, status=404
-    )
+    await call(client, "GET", f"/groups/{context[2].id}/calendar?page={pages}", status=422)
+    await call(client, "GET", f"/groups/{context[2].id}/calendar", user=STUDENT, status=403)
+    await call(client, "GET", f"/groups/{context[2].id}/calendar", user=OTHER_TEACHER, status=404)
 
 
 async def test_day_offers_free_future_starts_durations_and_template(context, client):
     _, _, _, assignment, _ = context
-    today = await call(client, "GET", f"/assignments/{assignment.id}/day?date={TODAY}")
+    today = await call(client, "GET", f"/groups/{context[2].id}/day?date={TODAY}")
     starts = [entry["time"] for entry in today["starts"]]
     assert starts[0] == "10:30" and starts[-1] == "20:30"
     assert today["template"] is None and today["busy"] == []
     assert today["capacities"] == [5, 10, 15, 20, 25, 30]
 
     await day(context, day_date=TOMORROW, start_time=time(14), end_time=time(16), capacity=7)
-    tomorrow = await call(client, "GET", f"/assignments/{assignment.id}/day?date={TOMORROW}")
+    tomorrow = await call(client, "GET", f"/groups/{context[2].id}/day?date={TOMORROW}")
     assert (tomorrow["date_label"], tomorrow["weekday"]) == ("11.11.2026", "ср")
     assert tomorrow["busy"] == [{"start": "14:00", "end": "16:00", "time_label": "14:00–16:00"}]
     starts = {entry["time"]: entry["durations"] for entry in tomorrow["starts"]}
@@ -130,7 +128,7 @@ async def test_day_offers_free_future_starts_durations_and_template(context, cli
     # The template does not fit the busy day, but fits the next one.
     assert tomorrow["template"] is None
     later = await call(
-        client, "GET", f"/assignments/{assignment.id}/day?date={TOMORROW + timedelta(days=1)}"
+        client, "GET", f"/groups/{context[2].id}/day?date={TOMORROW + timedelta(days=1)}"
     )
     assert later["template"] == {
         "start": "14:00",
@@ -138,13 +136,13 @@ async def test_day_offers_free_future_starts_durations_and_template(context, cli
         "time_label": "14:00–16:00",
         "capacity": 7,
     }
-    await call(client, "GET", f"/assignments/{assignment.id}/day?date=2026-11-09", status=422)
-    await call(client, "GET", f"/assignments/{assignment.id}/day?date=soon", status=422)
+    await call(client, "GET", f"/groups/{context[2].id}/day?date=2026-11-09", status=422)
+    await call(client, "GET", f"/groups/{context[2].id}/day?date=soon", status=422)
 
 
 async def test_created_slot_notifies_once_per_key_and_validates(context, client, bot):
     sessions, _, _, assignment, _ = context
-    path = f"/assignments/{assignment.id}/slots"
+    path = f"/groups/{context[2].id}/slots"
     created = await call(
         client, "POST", path, json=draft(), headers={"Idempotency-Key": "draft-key-1"}, status=201
     )
@@ -184,17 +182,20 @@ async def test_created_slot_notifies_once_per_key_and_validates(context, client,
         assert await session.scalar(select(func.count()).select_from(DefenseSlot)) == 1
 
 
-async def test_assignment_slots_and_unassigned_students(context, client):
+async def test_group_slots_and_unbooked_works(context, client):
     _, _, _, assignment, _ = context
     slot = await day(context, day_date=TOMORROW, capacity=2)
     await book(context, slot, student=203)
-    listing = await call(client, "GET", f"/assignments/{assignment.id}/slots")
-    assert listing["assignment"]["id"] == assignment.id
+    listing = await call(client, "GET", f"/groups/{context[2].id}/slots")
+    assert listing["group"] == {"id": context[2].id, "name": "ИВТ-101"}
     [item] = listing["items"]
     assert (item["id"], item["occupied"], item["capacity"]) == (slot.id, 1, 2)
-    unassigned = await call(client, "GET", f"/assignments/{assignment.id}/unassigned")
-    assert [entry["name"] for entry in unassigned["items"]] == ["User202", "User204"]
-    await call(client, "GET", f"/assignments/{assignment.id}/unassigned", user=STUDENT, status=403)
+    unassigned = await call(client, "GET", f"/groups/{context[2].id}/unassigned")
+    assert [
+        (entry["name"], entry["assignment_title"], entry["attempt_number"])
+        for entry in unassigned["items"]
+    ] == [("User202", "ЛР 1", 1), ("User204", "ЛР 1", 1)]
+    await call(client, "GET", f"/groups/{context[2].id}/unassigned", user=STUDENT, status=403)
 
 
 async def test_queue_close_reopen_and_cancel(context, client, bot):
@@ -203,8 +204,11 @@ async def test_queue_close_reopen_and_cancel(context, client, bot):
     await book(context, slot, student=204)
     await book(context, slot, student=202)
     queue = await call(client, "GET", f"/slots/{slot.id}/queue")
-    assert queue["assignment"]["title"] == "ЛР 1"
-    assert [(m["position"], m["name"]) for m in queue["items"]] == [(1, "User202"), (2, "User204")]
+    assert queue["group"]["name"] == "ИВТ-101"
+    assert [
+        (m["position"], m["name"], m["assignment_title"], m["attempt_number"])
+        for m in queue["items"]
+    ] == [(1, "User202", "ЛР 1", 1), (2, "User204", "ЛР 1", 1)]
     assert queue["slot"]["occupied"] == 2
 
     closed = await call(client, "POST", f"/slots/{slot.id}/close")
@@ -220,7 +224,7 @@ async def test_queue_close_reopen_and_cancel(context, client, bot):
     empty = await day(context, day_date=TOMORROW, start_time=time(17), end_time=time(18))
     assert await call(client, "DELETE", f"/slots/{empty.id}") == {
         "deleted": True,
-        "assignment_id": assignment.id,
+        "group_id": context[2].id,
     }
     await call(client, "DELETE", f"/slots/{empty.id}", status=404)
     # A student has no teacher rights; another teacher does not even see the slot.

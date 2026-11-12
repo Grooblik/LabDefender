@@ -9,13 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from labdefender.db.models import User
 from labdefender.handlers.coursework import require_draft
 from labdefender.handlers.defense import (
-    show_defense_slots,
-    show_queue_assignments,
+    show_assignment_slots,
+    show_group_slots,
     show_queue_groups,
     show_student_booking,
+    show_student_defense,
     slot_time_label,
 )
 from labdefender.handlers.notifications import Notifier, notify_queue_booking
+from labdefender.keyboards.coursework import selection_keyboard
 from labdefender.keyboards.defense import (
     StudentQueueCallback,
     StudentQueueDraftCallback,
@@ -23,6 +25,7 @@ from labdefender.keyboards.defense import (
 )
 from labdefender.services import queue as queue_service
 from labdefender.services.errors import (
+    ApprovalRequired,
     DefenseSlotClosed,
     DefenseSlotFull,
     QueueChanged,
@@ -32,11 +35,99 @@ from labdefender.services.queue import (
     enroll_slot,
     get_defense_slot,
     get_student_booking,
+    list_defense_works,
     move_to_end,
     require_approved,
     slot_end_at,
 )
 from labdefender.states.defense import QueueChange
+
+
+async def _ask_enroll(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+    *,
+    assignment_id: int,
+    slot_id: int,
+) -> None:
+    """Confirm booking one approved work into a slot of its group (or moving it there)."""
+    info = await get_defense_slot(session, actor_id=user.id, slot_id=slot_id)
+    slot = info.slot
+    submission = await require_approved(session, actor_id=user.id, assignment_id=assignment_id)
+    booking = await get_student_booking(session, actor_id=user.id, assignment_id=assignment_id)
+    if booking and booking.slot.id == slot.id:
+        await show_student_booking(message, session, user, assignment_id=assignment_id)
+        return
+    if not slot.is_open or slot_end_at(slot.date, slot.end_time) <= queue_service.now_moscow():
+        raise DefenseSlotClosed()
+    if info.occupied >= slot.capacity:
+        raise DefenseSlotFull()
+    label = "Сменить слот" if booking else "Записать"
+    description = (
+        f"{label}: попытка №{submission.attempt_number} на "
+        f"{slot.date:%d.%m.%Y} · {slot_time_label(slot)} (Москва)?"
+    )
+    if booking:
+        description += "\nВ новом слоте работа встанет в конец очереди."
+    await _ask(message, state, "enroll", assignment_id, slot.id, booking, description)
+
+
+async def _ask(message, state, operation, assignment_id, slot_id, booking, description) -> None:
+    nonce = secrets.token_hex(8)
+    await state.set_data(
+        {
+            "operation": operation,
+            "assignment_id": assignment_id,
+            "slot_id": slot_id,
+            "entry_id": booking.entry.id if booking else None,
+            "order_at": booking.entry.order_at.isoformat() if booking else None,
+            "nonce": nonce,
+        }
+    )
+    await state.set_state(QueueChange.confirmation)
+    await message.answer(description, reply_markup=queue_draft_keyboard(nonce, teacher=False))
+
+
+async def _choose_work(
+    message: Message, session: AsyncSession, user: User, state: FSMContext, *, slot_id: int
+) -> None:
+    """A slot was chosen (from the list or a notice): which approved work goes there?"""
+    info = await get_defense_slot(session, actor_id=user.id, slot_id=slot_id)
+    works = await list_defense_works(session, actor_id=user.id, group_id=info.slot.group_id)
+    if not works:
+        raise ApprovalRequired()
+    candidates = [work for work in works if work.booking is None or work.booking.slot.id != slot_id]
+    if not candidates:
+        await message.answer("Все ваши допущенные работы уже записаны в этот слот.")
+        await show_student_defense(message, session, user, group_id=info.slot.group_id)
+        return
+    if len(candidates) == 1:
+        await _ask_enroll(
+            message,
+            session,
+            user,
+            state,
+            assignment_id=candidates[0].assignment.id,
+            slot_id=slot_id,
+        )
+        return
+    buttons = [
+        (
+            f"{work.assignment.title} · попытка №{work.submission.attempt_number}"
+            + (f" · сейчас {work.booking.slot.date:%d.%m}" if work.booking else ""),
+            StudentQueueCallback(
+                action="pick", object_id=work.assignment.id, slot_id=slot_id
+            ).pack(),
+        )
+        for work in candidates
+    ]
+    await message.answer(
+        f"Какую работу записать на {info.slot.date:%d.%m.%Y} · "
+        f"{slot_time_label(info.slot)}? Каждая работа занимает своё место.",
+        reply_markup=selection_keyboard(buttons),
+    )
 
 
 def create_router() -> Router:
@@ -53,89 +144,56 @@ def create_router() -> Router:
         if not isinstance(callback.message, Message):
             raise StaleCourseAction()
         await state.clear()
-        action, object_id, offset = (
-            callback_data.action,
-            callback_data.object_id,
-            callback_data.offset,
-        )
+        message, action = callback.message, callback_data.action
+        object_id, offset = callback_data.object_id, callback_data.offset
         if action == "groups":
-            await show_queue_groups(callback.message, session, current_user, offset=offset)
+            await show_queue_groups(message, session, current_user, offset=offset)
         elif action == "assignments":
-            await show_queue_assignments(
-                callback.message, session, current_user, group_id=object_id, offset=offset
+            await show_student_defense(message, session, current_user, group_id=object_id)
+        elif action == "slots":
+            await show_group_slots(
+                message, session, current_user, group_id=object_id, offset=offset
             )
         elif action == "days":
-            await show_defense_slots(
-                callback.message, session, current_user, assignment_id=object_id, offset=offset
+            await show_assignment_slots(
+                message, session, current_user, assignment_id=object_id, offset=offset
             )
         elif action == "status":
-            await show_student_booking(
-                callback.message, session, current_user, assignment_id=object_id
+            await show_student_booking(message, session, current_user, assignment_id=object_id)
+        elif action == "choose":
+            await _choose_work(message, session, current_user, state, slot_id=object_id)
+        elif action == "pick":
+            await _ask_enroll(
+                message,
+                session,
+                current_user,
+                state,
+                assignment_id=object_id,
+                slot_id=callback_data.slot_id,
             )
         else:
-            if action == "choose":
-                info = await get_defense_slot(session, actor_id=current_user.id, slot_id=object_id)
-                slot = info.slot
-                assignment_id = slot.assignment_id
-                await require_approved(
-                    session, actor_id=current_user.id, assignment_id=assignment_id
-                )
-                booking = await get_student_booking(
-                    session, actor_id=current_user.id, assignment_id=assignment_id
-                )
-                if booking and booking.slot.id == slot.id:
-                    await show_student_booking(
-                        callback.message, session, current_user, assignment_id=assignment_id
-                    )
-                    await callback.answer()
-                    return
-                if (
-                    not slot.is_open
-                    or slot_end_at(slot.date, slot.end_time) <= queue_service.now_moscow()
-                ):
-                    raise DefenseSlotClosed()
-                if info.occupied >= slot.capacity:
-                    raise DefenseSlotFull()
-                operation = "enroll"
-                label = "Сменить слот" if booking else "Записаться"
-                description = f"{label} на {slot.date:%d.%m.%Y} · {slot_time_label(slot)} (Москва)?"
-                if booking:
-                    description += "\nВ новом слоте вы попадёте в конец очереди."
-            else:
-                assignment_id = object_id
-                await require_approved(
-                    session, actor_id=current_user.id, assignment_id=assignment_id
-                )
-                booking = await get_student_booking(
-                    session, actor_id=current_user.id, assignment_id=assignment_id
-                )
-                if booking is None:
-                    raise QueueChanged()
-                slot = booking.slot
-                if (
-                    not slot.is_open
-                    or slot_end_at(slot.date, slot.end_time) <= queue_service.now_moscow()
-                ):
-                    raise DefenseSlotClosed()
-                operation = "move"
-                description = (
-                    "Перенести вашу запись на "
-                    f"{slot.date:%d.%m.%Y} · {slot_time_label(slot)} в конец очереди?"
-                )
-            nonce = secrets.token_hex(8)
-            await state.set_data(
-                {
-                    "operation": operation,
-                    "assignment_id": assignment_id,
-                    "slot_id": slot.id,
-                    "entry_id": booking.entry.id if booking else None,
-                    "order_at": booking.entry.order_at.isoformat() if booking else None,
-                    "nonce": nonce,
-                }
+            assignment_id = object_id
+            await require_approved(session, actor_id=current_user.id, assignment_id=assignment_id)
+            booking = await get_student_booking(
+                session, actor_id=current_user.id, assignment_id=assignment_id
             )
-            await state.set_state(QueueChange.confirmation)
-            await callback.message.answer(
-                description, reply_markup=queue_draft_keyboard(nonce, teacher=False)
+            if booking is None:
+                raise QueueChanged()
+            slot = booking.slot
+            if (
+                not slot.is_open
+                or slot_end_at(slot.date, slot.end_time) <= queue_service.now_moscow()
+            ):
+                raise DefenseSlotClosed()
+            await _ask(
+                message,
+                state,
+                "move",
+                assignment_id,
+                slot.id,
+                booking,
+                "Перенести вашу запись на "
+                f"{slot.date:%d.%m.%Y} · {slot_time_label(slot)} в конец очереди?",
             )
         await callback.answer()
 

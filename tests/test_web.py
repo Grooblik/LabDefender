@@ -200,6 +200,7 @@ def test_page_modules_import_existing_exports():
         "views/home.js",
         "views/new-slot.js",
         "views/profile.js",
+        "views/reports.js",
         "views/slots.js",
         "views/student.js",
         "views/teacher.js",

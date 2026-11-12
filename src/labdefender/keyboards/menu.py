@@ -12,6 +12,7 @@ from aiogram.types import (
 
 from labdefender.enums import Role
 from labdefender.keyboards.groups import create_group_button
+from labdefender.keyboards.reports import my_report_button
 from labdefender.web import mini_app_url
 
 
@@ -141,6 +142,7 @@ def help_keyboard(role: Role, *, admin: bool, webapp_url: str = "") -> InlineKey
                 )
             ]
         )
+        rows.append([my_report_button()])
         rows.append([InlineKeyboardButton(text="🎓 Я преподаватель", callback_data="auth:teacher")])
     else:
         rows.append([create_group_button()])

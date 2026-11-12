@@ -53,8 +53,9 @@ async def test_shared_schema_stores_solution_review_and_queue(learning_context):
             status=SubmissionStatus.APPROVED,
             approved_at=approved_at,
         )
+        group_id = (await session.get(Assignment, assignment_id)).group_id
         day = DefenseSlot(
-            assignment_id=assignment_id,
+            group_id=group_id,
             date=date(2026, 11, 13),
             start_time=time(14, 0),
             end_time=time(16, 0),
@@ -62,7 +63,15 @@ async def test_shared_schema_stores_solution_review_and_queue(learning_context):
         )
         session.add_all([submission, day])
         await session.flush()
-        session.add(QueueEntry(slot_id=day.id, submission_id=submission.id, order_at=approved_at))
+        session.add(
+            QueueEntry(
+                slot_id=day.id,
+                submission_id=submission.id,
+                student_id=student_id,
+                assignment_id=assignment_id,
+                order_at=approved_at,
+            )
+        )
         await session.commit()
 
     async with sessions() as session:
@@ -76,7 +85,9 @@ async def test_shared_schema_stores_solution_review_and_queue(learning_context):
         assert stored_submission.file_id == "telegram-file-id"
         assert stored_submission.status == SubmissionStatus.APPROVED
         assert entry.order_at == stored_submission.approved_at == approved_at
-        assert stored_day.assignment_id == stored_submission.assignment_id
+        # The entry names the work; the slot belongs to the assignment's group.
+        assert (entry.student_id, entry.assignment_id) == (student_id, assignment_id)
+        assert stored_day.group_id == (await session.get(Assignment, assignment_id)).group_id
         group = await session.scalar(select(StudyGroup))
         assert len(group.invite_token) == 32
 

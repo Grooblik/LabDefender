@@ -256,12 +256,12 @@ async def test_notices_open_the_same_object_in_the_app(context, setup, bot):
     slot = await call(
         client,
         "POST",
-        f"/assignments/{assignment.id}/slots",
+        f"/groups/{group.id}/slots",
         json={"date": "2026-11-12", "start": "10:00", "end": "12:00", "capacity": 3},
         headers={"Idempotency-Key": "slot-key-1"},
         status=201,
     )
-    assert app_buttons(sent(bot, 202)[-1]) == [f"{TUNNEL}/app/?screen=/defense/a/{assignment.id}"]
+    assert app_buttons(sent(bot, 202)[-1]) == [f"{TUNNEL}/app/?screen=/defense/g/{group.id}"]
     booked = await call(
         client,
         "POST",
@@ -329,10 +329,10 @@ async def test_name_chosen_in_the_app_survives_telegram_and_reaches_the_teacher(
         await session.commit()
     members = await call(client, "GET", f"/groups/{group.id}/members")
     assert members["group"] == {"id": group.id, "name": "ИВТ-101"}
-    assert members["items"] == [
-        {"name": "User203", "username": "student203"},
-        {"name": "User204", "username": None},
-        {"name": "Мария Иванова", "username": None},
+    assert [(item["id"], item["name"], item["username"]) for item in members["items"]] == [
+        (ids[203], "User203", "student203"),
+        (ids[204], "User204", None),
+        (ids[STUDENT], "Мария Иванова", None),
     ]
     assert members["has_next"] is False
 

@@ -306,8 +306,13 @@ async def test_student_books_switches_and_moves_with_versions(context, setup, bo
     await book(context, first, student=203)
     path = f"/assignments/{assignment.id}/booking"
     assert (await call(client, "GET", path, user=STUDENT))["booking"] is None
-    slots = await call(client, "GET", f"/assignments/{assignment.id}/slots", user=STUDENT)
+    slots = await call(client, "GET", f"/groups/{context[2].id}/slots", user=STUDENT)
     assert [item["id"] for item in slots["items"]] == [first.id, second.id]
+    works = await call(client, "GET", f"/groups/{context[2].id}/defense", user=STUDENT)
+    assert [
+        (work["assignment"]["id"], work["attempt_number"], work["booking"])
+        for work in works["works"]
+    ] == [(assignment.id, 1, None)]
 
     nothing = {"expected_entry_id": None, "expected_order_at": None}
     enroll = f"/assignments/{assignment.id}/enroll"

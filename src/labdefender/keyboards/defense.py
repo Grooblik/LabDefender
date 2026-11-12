@@ -7,28 +7,41 @@ from labdefender.keyboards.coursework import selection_keyboard
 
 
 class TeacherQueueCallback(CallbackData, prefix="teacher"):
+    """object_id: a group for groups/slots/create/unbooked, a slot for open/close/reopen/cancel.
+
+    `assignments_*`, `new` and `days` come from buttons sent before slots belonged to groups
+    (`new`/`days` carry an assignment); they still lead to the matching group.
+    """
+
     section: Literal["queue"] = "queue"
     action: Literal[
         "groups_new",
         "groups_view",
-        "assignments_new",
-        "assignments_view",
-        "new",
-        "days",
+        "slots",
+        "create",
+        "unbooked",
         "open",
         "close",
         "reopen",
         "cancel",
+        "assignments_new",
+        "assignments_view",
+        "new",
+        "days",
     ]
     object_id: int = Field(ge=0, le=2**63 - 1)
     offset: int = Field(default=0, ge=0, le=2**31 - 1)
 
 
 class StudentQueueCallback(CallbackData, prefix="student"):
+    """object_id: a group for assignments (the student's works)/slots, a slot for choose,
+    an assignment for days/pick/move/status; `pick` also carries the chosen slot."""
+
     section: Literal["queue"] = "queue"
-    action: Literal["groups", "assignments", "days", "choose", "move", "status"]
+    action: Literal["groups", "assignments", "slots", "days", "choose", "pick", "move", "status"]
     object_id: int = Field(ge=0, le=2**63 - 1)
     offset: int = Field(default=0, ge=0, le=2**31 - 1)
+    slot_id: int = Field(default=0, ge=0, le=2**63 - 1)
 
 
 class TeacherDayDraftCallback(CallbackData, prefix="teacher"):

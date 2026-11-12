@@ -12,12 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from labdefender.config import Settings
 from labdefender.db.models import User
 from labdefender.db.session import create_database, initialize_database
-from labdefender.handlers import common, notifications, student, teacher
+from labdefender.handlers import common, notifications, reports, student, teacher
 from labdefender.handlers.notifications import Notifier
 from labdefender.keyboards.menu import MenuButton, main_menu
-from labdefender.local import database_path, instance_locks
+from labdefender.local import LocalOperationError, database_path, instance_locks
 from labdefender.middlewares.database import DatabaseMiddleware
 from labdefender.middlewares.domain_errors import DomainErrorMiddleware
+from labdefender.migrations import database_schema_state, needs_migration
 from labdefender.web.app import configure_menu_button, web_server
 from labdefender.web.reachability import address_check
 
@@ -60,6 +61,8 @@ def create_dispatcher(
         teacher.create_router(),
         # The teacher's notification switches; the screen itself opens from handlers.menu.
         notifications.create_router(),
+        # /report and report buttons: CSV files for both roles.
+        reports.create_router(),
     )
 
     fallback = Router(name="fallback")
@@ -86,6 +89,12 @@ async def run(settings: Settings) -> None:
     path = database_path(settings.database_url)
     bot_id = int(settings.bot_token.get_secret_value().split(":", 1)[0])
     with instance_locks(path, bot_id=bot_id):
+        # create_all adds missing tables only; an older schema must be migrated first.
+        if path.exists() and needs_migration(database_schema_state(path)):
+            raise LocalOperationError(
+                "Схема базы устарела. Остановите бота и выполните "
+                "`python -m labdefender.tools migrate` (копия базы создастся автоматически)."
+            )
         await _run(settings, path)
 
 
@@ -118,6 +127,7 @@ async def _run(settings: Settings, path: Path) -> None:
                     BotCommand(command="new_slot", description="Открыть слот защиты"),
                     BotCommand(command="queue", description="Защита и очередь"),
                     BotCommand(command="notifications", description="Уведомления"),
+                    BotCommand(command="report", description="Отчёт"),
                     BotCommand(command="app", description="Открыть приложение"),
                 ]
             )

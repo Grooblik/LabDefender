@@ -27,7 +27,7 @@ from labdefender.local import (
     database_path,
     restore_database,
 )
-from labdefender.migrations import database_schema_state, migrate_database
+from labdefender.migrations import database_schema_state, migrate_database, needs_migration
 from labdefender.services.queue import get_student_booking
 from labdefender.tunnel import TUNNEL_URL, local_web_url, shared_tunnel
 from labdefender.web import mini_app_url
@@ -60,10 +60,11 @@ def doctor(*, online: bool = False) -> None:
     print("OK: настройки прочитаны; секретные значения скрыты.")
     if path.exists():
         state = database_schema_state(path)
-        if state == "legacy":
-            print(
-                "INFO: найдена старая схема. Выполните "
-                "`python -m labdefender.tools migrate`, чтобы сохранить данные."
+        if needs_migration(state):
+            raise LocalOperationError(
+                "База создана прежней версией LabDefender (очередь защиты была у каждого "
+                "задания своя). Остановите бота и выполните "
+                "`python -m labdefender.tools migrate`: копия базы создастся автоматически."
             )
         elif state == "partial":
             print("WARN: схема базы частично мигрирована или неизвестна. Проверьте копию.")
@@ -164,7 +165,8 @@ async def offline_smoke() -> None:
                 if (
                     booking is None
                     or booking.position != 1
-                    or booking.occupied != 2
+                    # Both students' ЛР 1 and the second student's ЛР 2 share the slot.
+                    or booking.occupied != len(DEFAULT_STUDENT_IDS) + 1
                     or statuses
                     != {
                         SubmissionStatus.PENDING,

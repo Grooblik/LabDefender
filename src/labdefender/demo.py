@@ -67,16 +67,17 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
             first_slot = await call(
                 create_defense_slot,
                 actor_id=teacher.id,
-                assignment_id=assignments[0].id,
+                group_id=group.id,
                 day_date=today_moscow() + timedelta(days=1),
                 start_time=time(14, 0),
                 end_time=time(16, 0),
-                capacity=max(2, len(student_ids)),
+                # Everyone's ЛР 1 plus the last student's ЛР 2: works of two assignments.
+                capacity=max(3, len(student_ids) + 1),
             )
             await call(
                 create_defense_slot,
                 actor_id=teacher.id,
-                assignment_id=assignments[0].id,
+                group_id=group.id,
                 day_date=today_moscow() + timedelta(days=1),
                 start_time=time(16, 0),
                 end_time=time(18, 0),
@@ -85,7 +86,7 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
             await call(
                 create_defense_slot,
                 actor_id=teacher.id,
-                assignment_id=assignments[0].id,
+                group_id=group.id,
                 day_date=today_moscow() + timedelta(days=2),
                 start_time=time(10, 0),
                 end_time=time(12, 0),
@@ -141,6 +142,28 @@ async def seed_demo(path: Path, *, teacher_id: int, student_ids: tuple[int, ...]
                         submission_id=returned.id,
                         decision=SubmissionStatus.RETURNED,
                         comment="Добавьте обработку пустого ввода и поясните сложность.",
+                    )
+                if index == len(student_ids) - 1 and index > 0:
+                    second = await call(
+                        submit_solution,
+                        actor_id=student.id,
+                        assignment_id=assignments[1].id,
+                        expected_previous_id=None,
+                        solution=text_solution("https://example.com/second-work"),
+                    )
+                    await call(
+                        review_submission,
+                        actor_id=teacher.id,
+                        submission_id=second.id,
+                        decision=SubmissionStatus.APPROVED,
+                    )
+                    await call(
+                        enroll_slot,
+                        actor_id=student.id,
+                        assignment_id=assignments[1].id,
+                        slot_id=first_slot.id,
+                        expected_entry_id=None,
+                        expected_order_at=None,
                     )
             completed = True
         finally:

@@ -7,6 +7,7 @@ from pydantic import Field
 from labdefender.enums import Role
 from labdefender.keyboards.coursework import StudentCourseCallback, TeacherCourseCallback
 from labdefender.keyboards.defense import StudentQueueCallback, TeacherQueueCallback
+from labdefender.keyboards.reports import group_report_button
 from labdefender.services.groups import GROUP_PAGE_SIZE, GroupPage
 
 
@@ -98,11 +99,10 @@ def teacher_group_keyboard(group_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="Слоты защиты и очередь",
-                    callback_data=TeacherQueueCallback(
-                        action="assignments_view", object_id=group_id
-                    ).pack(),
+                    callback_data=TeacherQueueCallback(action="slots", object_id=group_id).pack(),
                 )
             ],
+            [group_report_button(group_id)],
             [
                 InlineKeyboardButton(
                     text="Ссылка-приглашение",

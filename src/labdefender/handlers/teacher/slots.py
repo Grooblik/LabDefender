@@ -17,7 +17,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from labdefender.db.models import User
-from labdefender.enums import Role
 from labdefender.filters.plain_text import PlainTextInput
 from labdefender.handlers.coursework import require_draft
 from labdefender.handlers.defense import show_slot_queue
@@ -35,9 +34,8 @@ from labdefender.keyboards.slots import (
 )
 from labdefender.services import queue as queue_service
 from labdefender.services.access import (
-    require_assignment_access,
     require_defense_slot_access,
-    require_user,
+    require_group_owner,
 )
 from labdefender.services.errors import InvalidDefenseSlot, StaleCourseAction
 from labdefender.services.queue import (
@@ -69,11 +67,11 @@ WIZARD_STATES = {
 }
 # Draft keys that stay valid when the wizard (re)enters a step.
 STEP_KEYS = {
-    DefenseSlotCreation.date: ("assignment_id", "title", "page"),
-    DefenseSlotCreation.start_time: ("assignment_id", "title", "page", "day_date"),
-    DefenseSlotCreation.end_time: ("assignment_id", "title", "page", "day_date", "start_time"),
+    DefenseSlotCreation.date: ("group_id", "title", "page"),
+    DefenseSlotCreation.start_time: ("group_id", "title", "page", "day_date"),
+    DefenseSlotCreation.end_time: ("group_id", "title", "page", "day_date", "start_time"),
     DefenseSlotCreation.capacity: (
-        "assignment_id",
+        "group_id",
         "title",
         "page",
         "day_date",
@@ -81,7 +79,7 @@ STEP_KEYS = {
         "end_time",
     ),
     DefenseSlotCreation.confirmation: (
-        "assignment_id",
+        "group_id",
         "title",
         "page",
         "day_date",
@@ -148,16 +146,16 @@ async def _show_calendar(
     slots = await list_slots_between(
         session,
         actor_id=user.id,
-        assignment_id=data["assignment_id"],
+        group_id=data["group_id"],
         first_day=first,
         last_day=last,
     )
     nonce = await _enter(state, DefenseSlotCreation.date, page=page)
     await _show(
         message,
-        f"Задание: {data['title']}\n"
+        f"Группа: {data['title']}\n"
         f"Выберите дату слота (Москва), {range_label(first, last)}.\n"
-        "• — на дату уже есть слоты задания.\n"
+        "• — на дату уже есть слоты группы.\n"
         "Или отправьте дату текстом YYYY-MM-DD.",
         calendar_keyboard(
             today=today,
@@ -174,7 +172,7 @@ async def _day_slots(session: AsyncSession, user: User, data: dict) -> tuple[dat
     slots = await list_slots_between(
         session,
         actor_id=user.id,
-        assignment_id=data["assignment_id"],
+        group_id=data["group_id"],
         first_day=day,
         last_day=day,
     )
@@ -189,9 +187,7 @@ async def _show_start(
     now = queue_service.now_moscow()
     busy = _busy(slots)
     options = start_options(day, busy, now)
-    template = await latest_slot_template(
-        session, actor_id=user.id, assignment_id=data["assignment_id"]
-    )
+    template = await latest_slot_template(session, actor_id=user.id, group_id=data["group_id"])
     repeat = None
     if template is not None and template_fits(
         day, template.start_time, template.end_time, busy, now
@@ -205,7 +201,7 @@ async def _show_start(
     hint = "" if options else "\nСвободного времени в сетке нет — отправьте время текстом."
     await _show(
         message,
-        f"Задание: {data['title']}\n"
+        f"Группа: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} ({weekday_label(day)})\n"
         f"{_busy_line(slots)}\n"
         f"Выберите время начала (Москва) или отправьте HH:MM.{hint}",
@@ -224,7 +220,7 @@ async def _show_end(
     nonce = await _enter(state, DefenseSlotCreation.end_time)
     await _show(
         message,
-        f"Задание: {data['title']}\n"
+        f"Группа: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} ({weekday_label(day)}), начало {start:%H:%M}.\n"
         f"{_busy_line(slots)}\n"
         "Выберите длительность или отправьте время окончания HH:MM.",
@@ -240,7 +236,7 @@ async def _show_capacity(message: Message, state: FSMContext, *, edit: bool) -> 
     nonce = await _enter(state, DefenseSlotCreation.capacity)
     await _show(
         message,
-        f"Задание: {data['title']}\n"
+        f"Группа: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} ({weekday_label(day)}), {interval_label(start, end)}.\n"
         "Выберите число мест или отправьте положительное число.",
         capacity_keyboard(nonce=nonce),
@@ -256,7 +252,7 @@ async def _show_confirmation(message: Message, state: FSMContext, *, edit: bool)
     nonce = await _enter(state, DefenseSlotCreation.confirmation)
     await _show(
         message,
-        f"Открыть слот защиты?\nЗадание: {data['title']}\n"
+        f"Открыть слот защиты?\nГруппа: {data['title']}\n"
         f"Дата: {day:%d.%m.%Y} (Москва)\n"
         f"Время: {interval_label(start, end)}\nМест: {data['capacity']}",
         slot_confirmation_keyboard(nonce=nonce),
@@ -270,13 +266,11 @@ async def start_slot_wizard(
     user: User,
     state: FSMContext,
     *,
-    assignment_id: int,
+    group_id: int,
 ) -> None:
-    await require_user(session, actor_id=user.id, role=Role.TEACHER)
-    assignment = await require_assignment_access(
-        session, actor_id=user.id, assignment_id=assignment_id
-    )
-    await state.set_data({"assignment_id": assignment.id, "title": assignment.title})
+    """Slot of a group: students book any approved work of the group into it."""
+    group = await require_group_owner(session, actor_id=user.id, group_id=group_id)
+    await state.set_data({"group_id": group.id, "title": group.name})
     await _show_calendar(message, session, user, state, page=0, edit=False)
 
 
@@ -460,7 +454,7 @@ def create_router() -> Router:
             slot = await create_defense_slot(
                 session,
                 actor_id=current_user.id,
-                assignment_id=data["assignment_id"],
+                group_id=data["group_id"],
                 day_date=date.fromisoformat(data["day_date"]),
                 start_time=time.fromisoformat(data["start_time"]),
                 end_time=time.fromisoformat(data["end_time"]),

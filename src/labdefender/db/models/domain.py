@@ -108,15 +108,20 @@ class Submission(Base):
 
 
 class DefenseSlot(Base):
+    """A defense session of a group (discipline): any approved work of the group can be booked.
+
+    Slots of one group must not overlap; the services check it. There is no unique constraint:
+    databases migrated from per-assignment slots may keep two slots at the same time.
+    """
+
     __tablename__ = "defense_slots"
     __table_args__ = (
-        UniqueConstraint("assignment_id", "date", "start_time"),
         CheckConstraint("start_time < end_time", name="valid_time_range"),
         CheckConstraint("capacity > 0", name="positive_capacity"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id"), index=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("study_groups.id"), index=True)
     date: Mapped[date] = mapped_column(Date)
     start_time: Mapped[time] = mapped_column(Time)
     end_time: Mapped[time] = mapped_column(Time)
@@ -125,10 +130,19 @@ class DefenseSlot(Base):
 
 
 class QueueEntry(Base):
+    """One booked work: the student, the assignment and the approved attempt (submission).
+
+    `student_id` and `assignment_id` repeat the submission's values, so the database itself
+    keeps one booking per student and assignment; a student may book several works.
+    """
+
     __tablename__ = "queue_entries"
+    __table_args__ = (UniqueConstraint("student_id", "assignment_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     slot_id: Mapped[int] = mapped_column(ForeignKey("defense_slots.id"), index=True)
     submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id"), unique=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    assignment_id: Mapped[int] = mapped_column(ForeignKey("assignments.id"), index=True)
     # Initial value = submission.approved_at; moving to the end sets this to now (UTC).
     order_at: Mapped[datetime] = mapped_column(DateTime)

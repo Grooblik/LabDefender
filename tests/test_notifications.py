@@ -226,8 +226,9 @@ async def test_new_and_reopened_slots_reach_only_approved_students_without_booki
     for student in (203, 204):
         [notice] = sent(bot, student)
         assert notice.text == (
-            "Открыт новый слот защиты.\nГруппа: ИВТ-101\nЗадание: ЛР 1\n"
-            "Слот: 12.11.2026 (чт) · 10:00–12:00 (Москва)\nСвободных мест: 2"
+            "Открыт новый слот защиты.\nГруппа: ИВТ-101\n"
+            "Слот: 12.11.2026 (чт) · 10:00–12:00 (Москва)\nСвободных мест: 2\n"
+            "Записать можно любую допущенную работу этой группы."
         )
         assert StudentQueueCallback.unpack(button(notice, "Записаться")).action == "choose"
 
@@ -250,7 +251,7 @@ async def test_teacher_learns_about_booking_and_switch_but_not_move(context, bot
     await press(dispatcher, bot, await prepare_booking(dispatcher, bot, first), user=202)
     [notice] = sent(bot, TEACHER)
     assert notice.text == (
-        "Запись на защиту: User202.\nГруппа: ИВТ-101\nЗадание: ЛР 1\n"
+        "Запись на защиту: User202.\nГруппа: ИВТ-101\nЗадание: ЛР 1 · попытка №1\n"
         "Слот: 11.11.2026 (ср) · 14:00–16:00 (Москва)\nЗаписано: 1 из 3."
     )
     assert TeacherQueueCallback.unpack(button(notice, "Очередь слота")).object_id == first.id
@@ -259,7 +260,7 @@ async def test_teacher_learns_about_booking_and_switch_but_not_move(context, bot
     await press(
         dispatcher,
         bot,
-        StudentQueueCallback(action="move", object_id=first.assignment_id),
+        StudentQueueCallback(action="move", object_id=context[3].id),
         user=202,
     )
     await press(

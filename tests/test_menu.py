@@ -190,6 +190,7 @@ async def test_help_lists_sections_with_commands_and_role_buttons(context, bot):
         "🆔 Мой Telegram ID",
         "✏️ Моё имя",
         "🔔 Уведомления",
+        "📊 Мой отчёт",
         "🎓 Я преподаватель",
     ]
     await press(dispatcher, bot, button(student_help, "🆔 Мой Telegram ID"), user=STUDENT)
@@ -310,13 +311,17 @@ async def test_group_cards_lead_to_defense_and_queue(context, bot):
     card = sent(bot)[-1]
     assert "Слоты защиты и очередь" in labels(card)
     await press(dispatcher, bot, button(card, "Слоты защиты и очередь"))
-    assert sent(bot)[-1].text == "Группа «ИВТ-101».\nВыберите задание:"
+    slots = sent(bot)[-1]
+    assert slots.text.startswith("Группа «ИВТ-101». В слот записывается любая допущенная работа")
+    assert labels(slots) == ["Создать слот защиты", "Допущенные без записи"]
 
     await press(dispatcher, bot, StudentGroupCallback(action="open", value=group.id), user=STUDENT)
     card = sent(bot)[-1]
     assert labels(card) == ["Задания группы", "Защита и очередь"]
     await press(dispatcher, bot, button(card, "Защита и очередь"), user=STUDENT)
-    assert sent(bot)[-1].text == "Группа «ИВТ-101».\nВыберите задание:"
+    works = sent(bot)[-1]
+    assert works.text == "Группа «ИВТ-101». Защита:\n• ЛР 1 · попытка №1 — не записана"
+    assert labels(works) == ["ЛР 1 · попытка №1", "Слоты защиты"]
 
 
 async def test_unknown_text_restores_menu(context, bot):
