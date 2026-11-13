@@ -1,5 +1,9 @@
 # LabDefender
 
+Ссылка на презентацию: https://docs.google.com/presentation/d/1PQ5cNj5shg_OaYNJmu6T4IfTkAiRm_2RyPM-u-P8fvE/edit?slide=id.h39b5407bc435b763_4_109#slide=id.h39b5407bc435b763_4_109
+Ссылка на промо-ролик: [https://drive.google.com/file/d/1WnEGTfSpLK4SY7IXQODULqXPcGvk84hH/view?usp=sharing](https://drive.google.com/file/d/1WnEGTfSpLK4SY7IXQODULqXPcGvk84hH/view?usp=drive_link)
+Ссылка на демо-ролик: https://drive.google.com/file/d/1BC47z_RZK_1Zx3RbfWaa6awZGg8uL4ah/view?usp=sharing
+
 Telegram-бот и Mini App для сдачи лабораторных работ и записи на защиту. Преподаватель
 публикует задания, проверяет решения и открывает слоты защиты. Студент сдаёт работу,
 получает результат проверки и после допуска видит её место в очереди.
